@@ -18,59 +18,81 @@
 (require racket/cmdline)
 (require racket/async-channel)
 (require racket/class)
-(require main) ;user defined data main.3 file
+(require main) ;user defined data main.3 file 
 
-;;eternal thread loop of executing tasks
-(define 3-thread (thread-num channels) 
-  (eval-task (get-task (thread-num channels)))  ;execute the task we get
-  (3-thread (channels)))
+
 
 ;TODO gets task from own channel. If empty, steal task from bottom of least empty
 ;queue. If no task is available it blocks waiting for a task in its queue
 (define get-task (thread-num channels))
 
+
+
 ;TODO evaluate a task. This will either be a standard function call OR message
 ;handling
 (define eval-task (task))
 
-;TODO returns number of cpus-1
-(define (get-num-cpu)) 
+
+
+;TODO returns number of cpus
+(define (get-num-cpu ()) 4) 
+
+
 
 ;TODO appends func expresion to the emptiest thread channel. Expects
 ;*thread-channels* to be defined
 (define (go func))
 
-;TODO  
-(define (make-double-ended-channel)
-  (make-async-channel #f))
+
+
+;;eternal thread loop of executing tasks
+(define 3-thread (thread-num channels) 
+  (eval-task (get-task (thread-num channels)))  ;execute the task we get
+  (3-thread (thread-num channels)))
+
+
 
 ;;make the desired thread channels and return as a list
-(define (make-channels num *thread-channels*)
+(define (make-channels num thread-channels)
   (if (> num 0)
-    (make-channels (- num 1) (append *thread-channels* (list make-double-ended-channel)))))
+    (make-channels (- num 1) 
+      (set! thread-channels (append thread-channels (list (make-async-channel #f)))))))
+
+
+
+(define (make-threads num threads thread-channels)
+  (if (> num 0)
+    (set! threads (append threads (list (thread (3-thread (+ num 1) thread-channels)))))
+    (make-threads (- num 1) thread-channels)))
+
+
 
 ;;setup worker threads and begin execution of the user defined main
-(define start-3 (args)
-  (let ([num-cpu (get-num-cpu)])
-    (let ([*thread-channels* (make-channels num-cpu 0 (list))])
-      (define (make-threads num *thread-channels*)
-        (if (> num 0)
-          (thread (3-thread num *thread-channels*))
-          (make-threads (- num 1) *thread-channels*)))
-      (make-threads num-cpu *thread-channels*)
-      (go (main args))
-      (3-thread (0 *thread-channels*)))))
+(define start-3 (num-threads main args)
+  (set! *3-threads* '('() '()))
+
+  (if (> num-threads 0)
+    (make-channels num-threads (cdr *3-threads*))
+    (make-threads num-threads (car *3-threads*) (cdr *3-threads*))
+
+    (set! (car *3-threads*) (append '(0) (car *3-threads*)))
+    (set! (cdr *3-threads*) (append '(make-async-channel #f) (cdr *3-threads*)))
+    (set! (cdr *3-threads*) (list->vector (cdr *3-threads)))
+
+    (go (main args))
+    (3-thread (0 (cdr *3-threads*)))))
+
+        
 
 ;;;; 3 language definitions, in 3.rkt file or something
-(define (data )) ;create a mutable data object (no function definitons allowed within a data object
-(define (func )) ;define a stateless function
-(define (message)) ;define a message
-(define (say)) ;emit message
-(define (listen )) ;listen for message
-(define (channel)) ;create a channel, an extension of messages and 2 way queues
-(define (:)) ;in a data object this is a (define), illegal in a func (only (let) allowed)
-(define ())
+(define (data ()) ()) ;create a mutable data object (no function definitons allowed within a data object
+(define (func ()) ()) ;define a stateless function
+(define (message()) ()) ;define a message
+(define (say()) ()) ;emit message
+(define (listen ()) ()) ;listen for message
+(define (c hannel()) ()) ;create a channel, an extension of messages and 2 way queues
+(define (: ()) ()) ;in a data object this is a (define), illegal in a func (only (let) allowed)
 
 ;;execute 3
 ;TODO figure out how to get argv & argc
-(start-3 (list argv argc))
+(start-3 (- (get-num-cpus) 1) main (list argv argc))
