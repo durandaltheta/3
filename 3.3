@@ -69,7 +69,7 @@
 
 ;;setup worker threads and begin execution of the user defined main
 (define start-3 (num-threads main args)
-  (set! *3-threads* '('() '()))
+  (define *3-threads* '('() '()))
 
   (if (> num-threads 0)
     (make-channels num-threads (cdr *3-threads*))
