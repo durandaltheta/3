@@ -13,86 +13,204 @@
 ;This is thre real main of a 3 program, the (data main) expression is called
 ;via (go main) after this is setup 
 #lang 3
-(require ffi/unsafe
-         ffi/unsafe/define)
-(require racket/cmdline)
+;(require racket/cmdline)
+(require racket/base)
+(require ffi/unsafe/atomic) ;atomic execution of specific tasks
+(require data/queue)
 (require racket/async-channel)
+(require pure/stateless)
 (require racket/class)
 (require main) ;user defined data main.3 file 
 
 
+;;;----------------------------------------------------------------------------
+;;;couroutine definition 
+;;;----------------------------------------------------------------------------
+(define (coroutine routine)
+   (let ([current routine]
+         (status 'suspended))
+     (lambda args
+       (cond ((null? args) 
+              (if (eq? status 'dead)
+                  (error 'dead-coroutine)
+                  (let ([continuation-and-value
+                         (call/cc (lambda (return)
+                                    (let ([returner
+                                           (lambda (value)
+                                             (call/cc (lambda (next)
+                                                        (return (cons next value)))))])
+                                      (current returner)
+                                      (set! status 'dead))))])
+                    (if (pair? continuation-and-value)
+                        (begin (set! current (car continuation-and-value))
+                               (cdr continuation-and-value))
+                        continuation-and-value))))
+             ((eq? (car args) 'status?) status)
+             ((eq? (car args) 'dead?) (eq? status 'dead))
+             ((eq? (car args) 'alive?) (not (eq? status 'dead)))
+             ((eq? (car args) 'kill!) (set! status 'dead))
+             (true nil)))))
 
-;TODO gets task from own channel. If empty, steal task from bottom of least empty
-;queue. If no task is available it blocks waiting for a task in its queue
-(define get-task (thread-num channels))
+;; Coroutines are intended to be used when defining functions. Somehow 3 needs 
+;; to execute all functions defined in the 3 language as couroutines that yield
+;; on return. Then the thread loop would be updated with couroutine checks and 
+;; special handling for routines that are taking too long (move them to back of 
+;; the queue). This should help provide concurrency for tasks with long
+;; execution times. 
 
 
+;;;----------------------------------------------------------------------------
+;;;datapool thread functions
+;;;----------------------------------------------------------------------------
+;;TODO gets task from own channel. If empty, steal task from top of least empty
+;;queue. If no task is available it blocks waiting for a task in its queue
+(defun get-max-queue (m l)
+  (cond [(null? (caar l)) m]
+        [(> (car l) m) (get-max (car l) (cdr l))]
+        [else (get-max m (cdr l)))])
 
-;TODO evaluate a task. This will either be a standard function call OR message
-;handling
+(defun get-min-queue (m l)
+  (cond [(null? (caar l)) m]
+        [(> (car l) m) (get-min (car l) (cdr l))]
+        [else (get-min m (cdr l)))])
+
+;; return thread's queue if not empty, otherwise steal from top of fullest 
+;; sibling thread queue
+(define (get-task-queue thread-num thread-queues)
+  (let ([thread-queue (vector-ref thread-queues thread-num)])
+    (? (eqv? (queue-length thread-queue) 0)
+      (let ([highest-queue (cdr (get-max-queue (for ([i thread-queues]) 
+             '((queue-length i) i))))])
+           (if (eqv? highest-queue 0) 
+             (thread-suspend)
+             (highest-queue)))
+      (thread-queue))
+
+(define (get-task thread-num thread-queues)
+  (let ([queue (get-task-queue thread-num thread-queues)])
+    ())) ;TODO, need thread safe queue pop mutation
+
+(define (dp-thread-get-queue-head queue)
+  (with-handlers ([exn:fail? #f])
+   (head queue)))
+
+;;TODO evaluate a task. This will either be a standard function call OR message
+;;handling
 (define eval-task (task))
 
+;;TODO appends func expresion to the emptiest thread channel.
+(define (go pool func)
+  (atomic-push (get-min-queue pool) (pure/stateless func)))
 
-
-;TODO returns number of cpus
-(define (get-num-cpu ()) 4) 
-
-
-
-;TODO appends func expresion to the emptiest thread channel. Expects
-;*thread-channels* to be defined
-(define (go func))
-
-
-
-;;eternal thread loop of executing tasks
-(define 3-thread (thread-num channels) 
-  (eval-task (get-task (thread-num channels)))  ;execute the task we get
-  (3-thread (thread-num channels)))
-
-
+;;eternal thread tail recursion of executing tasks
+(define dp-thread (thread-num thread-queues) 
+  (eval-task (get-task (thread-num thread-queues)))  ;execute the task we get
+  (dp-thread (thread-num thread-queues)))
 
 ;;make the desired thread channels and return as a list
-(define (make-channels num thread-channels)
+(define (make-channels num thread-queues)
   (if (> num 0)
     (make-channels (- num 1) 
-      (set! thread-channels (append thread-channels (list (make-async-channel #f)))))))
+      (set! thread-queues (append thread-queues '((make-queue)))))))
 
-
-
-(define (make-threads num threads thread-channels)
+(define (make-threads num threads thread-queues)
   (if (> num 0)
-    (set! threads (append threads (list (thread (3-thread (+ num 1) thread-channels)))))
-    (make-threads (- num 1) thread-channels)))
+    (set! threads (append threads '(thread (dp-thread num thread-queues))))
+    (make-threads (- num 1) thread-queues)))
 
 
 
-;;setup worker threads and begin execution of the user defined main
-(define start-3 (num-threads main args)
-  (define *3-threads* '('() '()))
+;;;----------------------------------------------------------------------------
+;;;basic channel functions
+;;;----------------------------------------------------------------------------
+;;create an async channel, no size limit by default
+(define (channel [size #f]) (make-async-channel size))
 
-  (if (> num-threads 0)
-    (make-channels num-threads (cdr *3-threads*))
-    (make-threads num-threads (car *3-threads*) (cdr *3-threads*))
+;;channel get, blocks by default
+(define (<- ch [block #t])
+  (if block
+    (async-channel-get ch)
+    (async-channel-try-get ch)))
 
-    (set! (car *3-threads*) (append '(0) (car *3-threads*)))
-    (set! (cdr *3-threads*) (append '(make-async-channel #f) (cdr *3-threads*)))
-    (set! (cdr *3-threads*) (list->vector (cdr *3-threads)))
+;;channel put
+(define (-> ch item)
+  (async-channel-put ch))
 
-    (go (main args))
-    (3-thread (0 (cdr *3-threads*)))))
+
+
+;;;----------------------------------------------------------------------------
+;;;datapool functions
+;;;----------------------------------------------------------------------------
+;;create datapool data struct
+;;if this value goes out of scope during its assigned datapool execution the 
+;;program will crash
+(define (make-datapool-data) '('() '() (channel #f)))
+
+(define (datapool-data-channel datapool-data) 
+  (cddr datapool-data))
+
+(define (datapool-data-threads datapool-data)
+  (car datapool-data))
+
+;;kill all threads in a datapool
+(define (close-datapool datapool-data)
+  (for ([i (datapool-data-threads datapool-data)])
+    (kill-thread i)))
+  
+;;return a message from the datapool's channel
+(define (listen-datapool datapool-data block)
+  (let ([ch (datapool-data-channel datapool-data)])
+    (<- ch block)))
+  
+;;create a datapool
+;;setup worker threads and begin execution of the user defined func
+(define (datapool thread-data num-threads func args)
+  (let ([thread-data (make-datapool-data)]
+    (if (> num-threads 0)
+      (begin
+        (make-channels num-threads (cdr thread-data))
+        (make-threads num-threads (car thread-data) (cdr thread-data))
+        (go (func '(thread-data args)))))
+    (thread-data)))
 
         
 
-;;;; 3 language definitions, in 3.rkt file or something
-(define (data ()) ()) ;create a mutable data object (no function definitons allowed within a data object
-(define (func ()) ()) ;define a stateless function
-(define (message()) ()) ;define a message
-(define (say()) ()) ;emit message
-(define (listen ()) ()) ;listen for message
-(define (c hannel()) ()) ;create a channel, an extension of messages and 2 way queues
-(define (: ()) ()) ;in a data object this is a (define), illegal in a func (only (let) allowed)
+;;;----------------------------------------------------------------------------
+;;; 3 language definitions, in 3.rkt file or something
+;;;----------------------------------------------------------------------------
+;;create a mutable data object (no function definitons (func ...) allowed within a data object
+(define-syntax data
+  (syntax-rules ()
+    [(data ...)]
+(data) ())
+
+;;in a data object this is a (define-property)
+;;illegal in a func (only (let) allowed)
+(define (:) ()) 
+
+;;define a stateless couroutine
+(define-syntax func
+  (syntax-rules ()
+    [(func ...) (couroutine 
+                  (let ([ret (pure/stateless (func ...))])
+                    (yield)
+                    (ret))]))
+
+;;;----------------------------------------------------------------------------
+;;; Optional 3 definitions, if channels are insufficient
+;;;----------------------------------------------------------------------------
+;;define a message
+(define (message) ()) 
+
+;;emit message
+(define (say source message) ()) 
+
+;;listen for message
+(define (listen source message destination function) ()) 
+
+
 
 ;;execute 3
-;TODO figure out how to get argv & argc
-(start-3 (- (get-num-cpus) 1) main (list argv argc))
+;TODO figure out how to get argv & argc 
+(define (get-num-cpu) (4)) 
+(define dp1 (datapool (- (get-num-cpus) 1) main '(argv argc)))
