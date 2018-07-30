@@ -152,24 +152,16 @@
 (define (make-dp-data) (vector '() '() (make-hash) (channel #f)))
 
 (define (get-dp-threads datapool-data)
-  (semaphore-wait *dp-data-semaphore*)
-  (vector-ref datapool-data 0)
-  (semaphore-post *dp-data-semaphore*))
+  (vector-ref datapool-data 0))
 
 (define (get-dp-queues datapool-data)
-  (semaphore-wait *dp-data-semaphore*)
-  (vector-ref datapool-data 1)
-  (semaphore-post *dp-data-semaphore*))
+  (vector-ref datapool-data 1))
 
 (define (get-dp-message-handlers datapool-data)
-  (semaphore-wait *dp-data-semaphore*)
-  (vector-ref datapool-data 2)
-  (semaphore-post *dp-data-semaphore*))
+  (vector-ref datapool-data 2))
 
 (define (get-dp-channel datapool-data) 
-  (semaphore-wait *dp-data-semaphore*)
-  (vector-ref datapool-data 3)
-  (semaphore-post *dp-data-semaphore*))
+  (vector-ref datapool-data 3))
 
 ;;kill all threads in a datapool
 (define (close-dp datapool-data)
@@ -181,14 +173,11 @@
   (let ([ch (get-datapool-channel data)])
     (<- ch block))) 
 
-(define (sync-dp-data) 
-  (semaphore-wait *dp-data-semaphore*)
-  (vector-set! *dp* 0 *dp-threads*)
-  (vector-set! *dp* 1 *dp-queues*)
-  (vector-set! *dp* 2 *dp-message-handlers*)
-  (vector-set! *dp* 3 *dp-channel*)
-  (semaphore-post *dp-data-semaphore*))
+(define (set-dp-queues queues) 
+  (vector-set! *dp* 1 queues))
 
+(define (set-dp-message-handlers handlers) 
+  (vector-set! *dp* 2 handlers))
 
 ;;create a datapool
 ;;setup worker threads and begin execution of the user defined func
@@ -196,12 +185,8 @@
   (let ([*dp* (make-dp-data)]
         (if (> num-threads 0)
             (begin 
-              (define *dp-data-semaphore* (make-semaphore 1))
               ;The following defines are *only* used for syncing dp data
-              (define *dp-threads* (get-dp-threads *dp*))
-              (define *dp-queues* (get-dp-queues *dp*))
-              (define *dp-message-handlers* (get-dp-message-handlers *dp*))
-              (define *dp-channel* (get-dp-channel *dp*))
+              (define *dp-data-semaphore* (make-semaphore 1))
               (make-channels num-threads (get-dp-queues *dp*))
               (make-threads num-threads 
                             (get-dp-threads *dp*) 
@@ -223,23 +208,32 @@
         (super-new)
         (init [(*dp* datapool-data)])
         (define/private (register-message-handler msg-type callback-form)
-                        (let ([msg-handlers (hash-ref *dp-message-handlers*
-                                                      msg-type 
-                                                      (begin 
-                                                        (hash-set! *dp-message-handlers*)
+                        (begin
+                          (semaphore-wait *dp-data-semaphore*)
+                          (let ([msg-handlers (hash-ref (get-dp-message-handlers *dp*)
                                                         msg-type 
-                                                        '(callback-form)
-                                                        (sync-dp-data)
-                                                        (#f)))])
-                          (if (not (eqv? #f msg-handlers))
-                              (begin
-                                (hash-set! *dp-message-handlers* 
-                                           msg-type 
-                                           (append *msg-handlers* '(callback-form)))
-                                (sync-dp-data)))))
-        (define/private (send-message msg)
-                        (go
-                          `())))
+                                                        #f)])
+                            (if (eqv? #f msg-handlers)
+                                (set-dp-message-handlers 
+                                  (hash-set msg-handlers
+                                            msg-type 
+                                            '(callback-form)))
+                                (set-dp-message-handlers 
+                                  (hash-set msg-handlers
+                                            msg-type 
+                                            (append msg-handlers '(callback-form))))))
+                          (semaphore-post *dp-data-semaphore*)
+                          #t))
+        (define/private (send-message inp-msg)
+                        (begin
+                          (go
+                            `((couroutine (let ([msg ,inp-msg] 
+                                                [handlers (hash-ref (get-dp-message-handlers *dp*) 
+                                                                    (msg-type msg))])
+                                            (if (not (eqv? handlers #f))
+                                                (for ([h handlers])
+                                                     (go h)))))))
+                          #t)))
 
 ;; message class
 (class message%
