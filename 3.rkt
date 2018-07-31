@@ -69,7 +69,7 @@
   ;;; Start private datapool thread function defines
   ;;;--------------------------------------------------------------------------
   ;; Get a thread pid at provided index
-  (define (get-dp-thread-id idx)
+  (define (get-dp-thread-pid idx)
     (car (vector-ref (vector-ref *datapool-environment-data* 0) idx)))
 
 
@@ -150,7 +150,7 @@
       (semaphore-wait (get-dp-queue-sem q-idx))
       (enqueue! (get-dp-queue q-idx) form)
       (semaphore-post (get-dp-queue-sem q-idx))
-      (thread-resume (get-dp-thread-id q-idx))))
+      (thread-resume (get-dp-thread-pid q-idx))))
 
 
   ;; Eternal thread tail recursion of executing tasks
@@ -170,10 +170,12 @@
              (eqv? (vector-ref *datapool-environment-data* i) id) 
              (set! thread-num i)))
       (dp-thread i)))
+
   ;;;--------------------------------------------------------------------------
   ;;; End private defines
   ;;;--------------------------------------------------------------------------
-
+  
+  ;; Continue (datapool) evaluation
   (let ([*num-dp-threads* num-threads]
         [*datapool-environment-data* (make-dp-data num-threads)]
         (if (> num-threads 0)
@@ -258,8 +260,8 @@
      (send-message self msg)]))
 
 
-;; define a pure stateless function. These should always be safe when executed 
-;; asynchronously with a (go) call
+;; define a pure stateless function or form. These should always be safe when 
+;; executed asynchronously with a (go) call
 (define-syntax pure-func
   (syntax-rules ()
     [(definep ...) 
