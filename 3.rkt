@@ -22,7 +22,7 @@
 
 ;;channel put
 (define (-> ch item)
-  (async-channel-put ch))
+  (async-channel-put ch item))
 
 
 
