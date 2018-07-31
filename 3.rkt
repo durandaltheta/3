@@ -29,25 +29,44 @@
 ;;;----------------------------------------------------------------------------
 ;;;datapool functions
 ;;;----------------------------------------------------------------------------
-;;create datapool data 
-(define (make-dp-data num-threads) 
-  (vector 
-    ;thread id's, queues, and semaphores
-    (make-vector num-threads '((thread (thunk (dp-thread-start)))
-                               (make-queue) 
-                               (make-semaphore 1))) 
-    (make-hash) ;hash table of lists of message handlers
-    '((channel #f) (channel #f)) ;channel to datapool parent scope
-
 ;; Get the communication channel to the datapool scope
-(define (get-dp-channel data) 
-  (car (vector-ref data 2)))
+(define (get-dp-channel dp-data) 
+  (car (vector-ref dp-data 2)))
 
-;;create a datapool
-;;setup worker threads and begin execution of the user defined func
+
+;;kill all threads in a datapool
+(define (close-dp dp-data)
+  (for ([i (vector-length (vector-ref dp-data 0))])
+       (kill-thread (car (vector-ref (vector-ref dp-data 0) i)))))
+
+
+;;return a message from the datapool's channel
+(define (listen-dp dp-data block)
+  (let ([ch (get-dp-channel dp-data)])
+    (<- ch block))) 
+
+
+;;send a message to the datapool
+(define (send-dp dp-data msg)
+  (let ([ch (vector-ref dp-data 2)])
+    (-> ch msg)))
+
+;; Create a datapool environment. Setup worker threads and begin execution of 
+;; the user defined main form. Returns datapool environment data vector needed
+;; as the argument for management functions like (close-dp).
 (define (datapool num-threads dp-main)
+  ;;create datapool data 
+  (define (make-dp-data num-threads) 
+    (vector 
+      ;thread id's, queues, and semaphores
+      (make-vector num-threads '((thread (thunk (dp-thread-start)))
+                                 (make-queue) 
+                                 (make-semaphore 1))) 
+      (make-hash) ;hash table of lists of message handlers
+      '((channel #f) (channel #f)))) ;channel to datapool parent scope
+
   ;;;--------------------------------------------------------------------------
-  ;;; Private datapool thread functions
+  ;;; Start private datapool thread function defines
   ;;;--------------------------------------------------------------------------
   ;; Get a thread pid at provided index
   (define (get-dp-thread-id idx)
@@ -151,6 +170,9 @@
              (eqv? (vector-ref *datapool-environment-data* i) id) 
              (set! thread-num i)))
       (dp-thread i)))
+  ;;;--------------------------------------------------------------------------
+  ;;; End private defines
+  ;;;--------------------------------------------------------------------------
 
   (let ([*num-dp-threads* num-threads]
         [*datapool-environment-data* (make-dp-data num-threads)]
@@ -163,24 +185,6 @@
               ;activity
               (go '(dp-main))))
         (*datapool-environment-data*))))
-
-
-;;kill all threads in a datapool
-(define (close-dp dp-data)
-  (for ([i (vector-length (vector-ref dp-data 0))])
-       (kill-thread (car (vector-ref (vector-ref dp-data 0) i)))))
-
-
-;;return a message from the datapool's channel
-(define (listen-dp dp-data block)
-  (let ([ch (vector-ref dp-data 2)])
-    (<- ch block))) 
-
-
-;;send a message to the datapool
-(define (send-dp dp-data msg)
-  (let ([ch (vector-ref dp-data 2)])
-    (-> ch msg)))
 
 
 
