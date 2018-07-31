@@ -37,11 +37,11 @@
                                (make-queue) 
                                (make-semaphore 1))) 
     (make-hash) ;hash table of lists of message handlers
-    (channel #f))) ;channel to datapool parent scope
+    '((channel #f) (channel #f)) ;channel to datapool parent scope
 
-;; Get the communication channel to the parent scope
+;; Get the communication channel to the datapool scope
 (define (get-dp-channel data) 
-  (vector-ref data 2))
+  (car (vector-ref data 2)))
 
 ;;create a datapool
 ;;setup worker threads and begin execution of the user defined func
@@ -70,8 +70,8 @@
 
 
   ;; Get the communication channel to the parent scope
-  (define (get-dp-channel) 
-    (vector-ref *datapool-environment-data* 2))
+  (define (get-dp-parent-channel) 
+    (cdr (vector-ref *datapool-environment-data* 2)))
 
 
   ;; Set the global message handlers to something new
@@ -278,5 +278,5 @@
 ;;;----------------------------------------------------------------------------
 ;TODO figure out how to get argv & argc 
 (define dp1 (datapool 4 '(main argv argc)))
-(let ([ch (get-dp-channel dp1)]) 
+(let ([ch (get-dp-parent-channel dp1)]) 
   (<- ch))
