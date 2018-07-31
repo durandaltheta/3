@@ -1,128 +1,9 @@
-;1. Implement couroutine?
-;2. launch 1 thread per cpu core at program launch
-;- each thread is passed x double ended queues (where x is the number of
-;threads), implement a work stealing algorithm
-;- Add couroutine to the queue with the least number of tasks (lowest queue
-;depth, when tied, lowest numbered cpu)
-;- When a thread has no more work it steals the task off the bottom of the
-;largest queue 
-;3. When a (go (form)) function is launched it adds the form to the bottom of
-;the lowest queue (lowest numbered cpu when tied)
-
-
-;This is thre real main of a 3 program, the (data main) expression is called
-;via (go main) after this is setup 
-#lang 3
-;(require racket/cmdline)
-(require racket/base)
-(require ffi/unsafe/atomic) ;atomic execution of specific tasks
-(require data/queue)
-(require racket/async-channel)
-(require pure/stateless)
-(require racket/class)
-(require main) ;user defined data main.3 file 
-
-
-;;;----------------------------------------------------------------------------
-;;;couroutine definition 
-;;;----------------------------------------------------------------------------
-(define (coroutine routine)
-  (let ([current routine]
-        (status 'suspended))
-    (lambda args
-      (cond ((null? args) 
-             (if (eq? status 'dead)
-                 (error 'dead-coroutine)
-                 (let ([continuation-and-value
-                         (call/cc (lambda (return)
-                                    (let ([returner
-                                            (lambda (value)
-                                              (call/cc (lambda (next)
-                                                         (return (cons next value)))))])
-                                      (current returner)
-                                      (set! status 'dead))))])
-                   (if (pair? continuation-and-value)
-                       (begin (set! current (car continuation-and-value))
-                              (cdr continuation-and-value))
-                       continuation-and-value))))
-            ((eq? (car args) 'status?) status)
-            ((eq? (car args) 'dead?) (eq? status 'dead))
-            ((eq? (car args) 'alive?) (not (eq? status 'dead)))
-            ((eq? (car args) 'kill!) (set! status 'dead))
-            (true nil)))))
-
-;; Coroutines are intended to be used when defining functions. Somehow 3 needs 
-;; to execute all functions defined in the 3 language as couroutines that yield
-;; on return. Then the thread loop would be updated with couroutine checks and 
-;; special handling for routines that are taking too long (move them to back of 
-;; the queue). This should help provide concurrency for tasks with long
-;; execution times. 
-
-
-;;;----------------------------------------------------------------------------
-;;;datapool thread functions
-;;;----------------------------------------------------------------------------
-;;TODO gets task from own channel. If empty, steal task from top of least empty
-;;queue. If no task is available it blocks waiting for a task in its queue
-(defun get-max-queue (m l)
-       (cond [(null? (caar l)) m]
-             [(> (car l) m) (get-max (car l) (cdr l))]
-             [else (get-max m (cdr l)))])
-
-(defun get-min-queue (m l)
-       (cond [(null? (caar l)) m]
-             [(> (car l) m) (get-min (car l) (cdr l))]
-             [else (get-min m (cdr l)))])
-
-;; return thread's queue if not empty, otherwise steal from top of fullest 
-;; sibling thread queue
-(define (get-task-queue thread-num thread-queues)
-  (let ([thread-queue (vector-ref thread-queues thread-num)])
-    (? (eqv? (queue-length thread-queue) 0)
-       (let ([highest-queue (cdr (get-max-queue (for ([i thread-queues]) 
-                                                     '((queue-length i) i))))])
-         (if (eqv? highest-queue 0) 
-             (thread-suspend)
-             (highest-queue)))
-       (thread-queue))))
-
-(define (get-task thread-num thread-queues)
-  (let ([queue (get-task-queue thread-num thread-queues)])
-    ())) ;TODO, need thread safe queue pop mutation
-
-(define (dp-thread-get-queue-head queue)
-  (with-handlers ([exn:fail? #f])
-                 (head queue)))
-
-;; Evaluate a coroutine. This will either be a standard function call OR 
-;; message handling
-(define (eval-task coroutine)
-  (begin
-    (eval coroutine)
-    (if (eval coroutine 'alive) 
-        (eval-task coroutine)
-        (#f))))
-
-;;TODO appends func expresion to the emptiest thread channel.
-(define (go pool func)
-  (atomic-push (get-min-queue pool) (pure/stateless func)))
-
-;;eternal thread tail recursion of executing tasks
-(define dp-thread (thread-num thread-queues) 
-  (eval-task (get-task (thread-num thread-queues)))  ;execute the task we get
-  (dp-thread (thread-num thread-queues)))
-
-;;make the desired thread channels and return as a list
-(define (make-channels num thread-queues)
-  (if (> num 0)
-      (make-channels (- num 1) 
-                     (set! thread-queues (append thread-queues '((make-queue)))))))
-
-(define (make-threads num threads thread-queues)
-  (if (> num 0)
-      (set! threads (append threads '(thread (dp-thread num thread-queues))))
-      (make-threads (- num 1) thread-queues)))
-
+#lang racket
+(require racket/base
+         racket/class
+         racket/async-channel
+         data/queue
+         pure/stateless)
 
 
 ;;;----------------------------------------------------------------------------
@@ -131,11 +12,13 @@
 ;;create an async channel, no size limit by default
 (define (channel [size #f]) (make-async-channel size))
 
+
 ;;channel get, blocks by default
 (define (<- ch [block #t])
   (if block
-      (async-channel-get ch)
-      (async-channel-try-get ch)))
+    (async-channel-get ch)
+    (async-channel-try-get ch)))
+
 
 ;;channel put
 (define (-> ch item)
@@ -144,60 +27,213 @@
 
 
 ;;;----------------------------------------------------------------------------
+;;;couroutine definition 
+;;;----------------------------------------------------------------------------
+;; Coroutines can 'pause' execution at arbitrary points by (yield) ing 
+
+(define (make-generator procedure)
+  (define last-return values)
+  (define last-value #f)
+  (define (last-continuation _) 
+    (let ((result (procedure yield))) 
+      (last-return result)))
+
+  (define (yield value)
+    (call/cc (lambda (continuation)
+               (set! last-continuation continuation)
+               (set! last-value value)
+               (last-return value))))
+
+  (lambda args
+    (call/cc (lambda (return)
+               (set! last-return return)
+               (if (null? args)
+                 (last-continuation last-value)
+                 (apply last-continuation args))))))
+
+
+(define (coroutine form)
+  (make-generator
+    (lambda (yield)
+      (yield #t)
+      (eval form)
+      (yield #f))))
+
+
+
+;;;----------------------------------------------------------------------------
 ;;;datapool functions
 ;;;----------------------------------------------------------------------------
-;;create datapool data struct
-;;if this value goes out of scope during its assigned datapool execution the 
-;;program will crash
-(define (make-dp-data) (vector '() '() (make-hash) (channel #f)))
+;;create a datapool
+;;setup worker threads and begin execution of the user defined func
+(define (datapool num-threads dp-main args)
+  ;;create datapool data 
+  (define (make-dp-data num-threads) 
+    (vector 
+      ;thread id's, queues, and semaphores
+      (make-vector num-threads '((thread '(dp-thread-start num-threads))
+                                 (make-queue) 
+                                 (make-semaphore 1))) 
+      (make-hash) ;hash table of lists of message handlers
+      (channel #f))) ;channel to datapool parent scope
 
-(define (get-dp-threads datapool-data)
-  (vector-ref datapool-data 0))
+  (let ([*num-dp-threads* num-threads]
+        [*dp* (make-dp-data num-threads)]
+        (if (> num-threads 0)
+          (begin 
+            ;The following define is *only* used for syncing message handlers
+            (define *dp-data-message-handler-sem* (make-semaphore 1))
 
-(define (get-dp-queues datapool-data)
-  (vector-ref datapool-data 1))
+            ;The following is the load balancing rule. When it returns #f, the
+            ;given thread pauses execution of its current coroutine, places
+            ;the coroutine at the end of its task queue, and grabs the next task
+            (define *dp-thread-load-rule* (base-load-rule 10))
 
-(define (get-dp-message-handlers datapool-data)
-  (vector-ref datapool-data 2))
+            ;Execute the provided dp-main function, kicking off datapool 
+            ;activity
+            (go *dp* (dp-main args))))
+        (*dp*))))
 
-(define (get-dp-channel datapool-data) 
-  (vector-ref datapool-data 3))
 
 ;;kill all threads in a datapool
-(define (close-dp datapool-data)
-  (for ([i (get-datapool-threads datapool-data)])
-       (kill-thread i)))
+(define (close-dp dp-data)
+  (for ([i (vector-length (vector-ref dp-data 0))])
+       (kill-thread (car (vector-ref (vector-ref dp-data 0) i)))))
+
 
 ;;return a message from the datapool's channel
-(define (listen-dp data block)
-  (let ([ch (get-datapool-channel data)])
+(define (listen-dp dp-data block)
+  (let ([ch (vector-ref dp-data 2)])
     (<- ch block))) 
 
-(define (set-dp-queues queues) 
-  (vector-set! *dp* 1 queues))
+
+;;send a message to the datapool
+(define (send-dp dp-data msg)
+  (let ([ch (vector-ref dp-data 2)])
+    (-> ch msg)))
+
+
+
+;;;----------------------------------------------------------------------------
+;;;datapool thread functions
+;;;----------------------------------------------------------------------------
+(define (get-dp-thread-id idx)
+  (car (vector-ref (vector-ref *dp* 0) idx)))
+
+
+(define (get-dp-queue idx)
+  (cdr (vector-ref (vector-ref *dp* 0 ) idx)))
+
+
+(define (get-dp-queue-sem idx)
+  (cddr (vector-ref (vector-ref *dp* 0) idx)))
+
+
+(define (get-dp-message-handlers)
+  (vector-ref *dp* 1))
+
+
+(define (get-dp-channel dp-data) 
+  (vector-ref *dp* 2))
+
 
 (define (set-dp-message-handlers handlers) 
   (vector-set! *dp* 2 handlers))
 
-;;create a datapool
-;;setup worker threads and begin execution of the user defined func
-(define (datapool num-threads function args)
-  (let ([*dp* (make-dp-data)]
-        (if (> num-threads 0)
-            (begin 
-              ;The following defines are *only* used for syncing dp data
-              (define *dp-data-semaphore* (make-semaphore 1))
-              (make-channels num-threads (get-dp-queues *dp*))
-              (make-threads num-threads 
-                            (get-dp-threads *dp*) 
-                            (get-dp-queues *dp*))
-              (go *dp* (function '(*dp* args)))))
-        (thread-data))))
+
+(define (get-max-dp-q-idx)
+  (define longest '((queue-length (get-dp-queue 0)) 0))
+  (if (> *num-dp-threads* 1)
+    (for ([i (in-range 1 *num-dp-threads*)])
+         (let ([cur-q-len (queue-length (get-dp-queue i))])
+           (if (> (car longest) cur-q-len))
+           (begin
+             (set! longest '(cur-q-len i))))))
+  (cdr longest))
+
+
+(define (get-min-dp-q-idx)
+  (define shortest '((queue-length (get-dp-queue 0)) 0))
+  (if (> *num-dp-threads* 1)
+    (for ([i (in-range 1 *num-dp-threads*)])
+         (let ([cur-q-len (queue-length (get-dp-queue i))])
+           (if (< (car shortest) cur-q-len))
+           (begin
+             (set! shortest '(cur-q-len i))))))
+  (cdr shortest))
+
+
+;; return thread's queue index if not empty, otherwise gets the index of the 
+;; fullest queue.
+(define (get-task-q-idx thread-idx)
+  (let ([thread-queue (get-dp-queue thread-idx)])
+    (if (eqv? (queue-length thread-queue) 0)
+      (let ([highest-idx (get-max-dp-q-idx)])
+        (if (eqv? (queue-length (get-dp-queue highest-idx)) 0) 
+          (thread-suspend (current-thread))
+          (highest-idx)))
+      (thread-idx))))
+
+
+(define (get-task thread-idx)
+  (define task '(coroutine))
+  (let ([q-idx (get-task-q-idx thread-idx)])
+    (semaphore-wait (get-dp-queue-sem q-idx))
+    (set! task (dequeue! (get-dp-queue q-idx)))
+    (semaphore-post (get-dp-queue-sem q-idx))
+    (task)))
+
+
+;; Simplest possible load rule, returns itself with num-1. When num hits 0, 
+;; returns #f. This means any given coroutine task will only evaluate num times
+;; in a row before being rotated to the end of the queue
+(define (base-load-rule num) 
+  (if (<= num 0) `(base-load-rule ,(- num 1)) #f))
+
+
+;; Evaluate a coroutine. This will either be a standard function call OR 
+;; message handling. If the evaluated task yields and is still active will 
+;; continue evaluation until load-rule returns #f
+(define (eval-task task load-rule)
+  (let ([ret (eval task)])
+    (if (ret #t) 
+      (let ([rule (eval load-rule)])
+        (if (rule) 
+          (eval-task task rule)
+          (go task))))))
+
+
+;;Enqueues func expresion to the emptiest thread queue and resumes the thread
+(define (go form)
+  (let ([q-idx (get-min-dp-q-idx)])
+    (semaphore-wait (get-dp-queue-sem q-idx))
+    (enqueue! (get-dp-queue q-idx) form)
+    (semaphore-post (get-dp-queue-sem q-idx))
+    (thread-resume (get-dp-thread-id q-idx))))
+
+
+;;eternal thread tail recursion of executing tasks
+(define (dp-thread thread-idx) 
+  ;execute the task we get
+  (eval-task (get-task thread-idx) *dp-thread-load-rule*)  
+  (dp-thread thread-idx))
+
+
+;;thread startup function
+(define (dp-thread-start)
+  (thread-suspend id)
+  (let ([id (current-thread)])
+    (define thread-num 0)
+    (for ([i *num-dp-threads*])
+         (if 
+           (eqv? (vector-ref *dp* i) id) 
+           (set! thread-num i)))
+    (dp-thread i)))
 
 
 
 ;;;----------------------------------------------------------------------------
-;;; 3 language definitions, in 3.rkt file or something
+;;; classes & macros
 ;;;----------------------------------------------------------------------------
 ;; data object interface and class
 (define data-interface (interface () 
@@ -206,34 +242,32 @@
 
 (class* data% (data-interface)
         (super-new)
-        (init [(*dp* datapool-data)])
         (define/private (register-message-handler msg-type callback-form)
                         (begin
-                          (semaphore-wait *dp-data-semaphore*)
-                          (let ([msg-handlers (hash-ref (get-dp-message-handlers *dp*)
+                          (semaphore-wait *dp-data-message-handler-sem*)
+                          (let ([msg-handlers (hash-ref (get-dp-message-handlers)
                                                         msg-type 
                                                         #f)])
                             (if (eqv? #f msg-handlers)
-                                (set-dp-message-handlers 
-                                  (hash-set msg-handlers
-                                            msg-type 
-                                            '(callback-form)))
-                                (set-dp-message-handlers 
-                                  (hash-set msg-handlers
-                                            msg-type 
-                                            (append msg-handlers '(callback-form))))))
-                          (semaphore-post *dp-data-semaphore*)
+                              (set-dp-message-handlers 
+                                (hash-set msg-handlers
+                                          msg-type 
+                                          '(callback-form)))
+                              (set-dp-message-handlers 
+                                (hash-set msg-handlers
+                                          msg-type 
+                                          (append msg-handlers '(callback-form))))))
+                          (semaphore-post kdp-data-message-handler-sem*)
                           #t))
         (define/private (send-message inp-msg)
-                        (begin
-                          (go
-                            `((couroutine (let ([msg ,inp-msg] 
-                                                [handlers (hash-ref (get-dp-message-handlers *dp*) 
-                                                                    (msg-type msg))])
-                                            (if (not (eqv? handlers #f))
-                                                (for ([h handlers])
-                                                     (go h)))))))
-                          #t)))
+                        (go
+                          `(couroutine `(let ([msg ,,inp-msg] 
+                                              [handlers (hash-ref (get-dp-message-handlers) 
+                                                                  (msg-type msg))])
+                                          (if (not (eqv? handlers #f))
+                                            (for ([h handlers])
+                                                 (go h))))))
+                        #t))
 
 ;; message class
 (class message%
@@ -250,31 +284,35 @@
 
 (define-syntax connect-message
   (syntax-rules ()
-    [(connect src-obj msg-type dst-obj handler)
-     (register-message-handler msg-type
-                               `(couroutine (if (eqv? ,src-obj (msg-src msg)) 
-                                                (send ,dst-obj ,handler (msg-args msg)))))]))
+                [(connect src-obj msg-type dst-obj handler)
+                 (register-message-handler 
+                   msg-type
+                   `(couroutine '(if (eqv? ,src-obj (msg-src msg)) 
+                                   (send ,dst-obj ,handler (msg-args msg)))))]))
 
 (define-syntax send-message
   (syntax-rules ()
-    [(emit msg) 
-     (send-message self msg)]))
+                [(emit msg) 
+                 (send-message self msg)]))
 
 ;; define a stateless couroutine. These should always be safe when executed 
 ;; asynchronously with a (go) call
-(define-syntax func
+(define-syntax pure-func
   (syntax-rules ()
-    [(func ...) (couroutine 
-                  (let ([ret (pure/stateless (define ...))])
-                    (yield)
-                    (ret))]))) 
+                [(func ...) (couroutine 
+                              '(begin
+                                 (yield #t)
+                                 (pure/stateless (define ...))
+                                 (yield #f)))]))
 
 ;; Asynchronously set a public field. set-field! should be inherently 
-;; threadsafe (just like normal set!)
-(define-syntax asynch-set-field
+;; threadsafe (just like normal set!). 
+;; Ex:
+;; (: my-field '(+ 1 2))
+(define-syntax async-set-field
   (syntax-rules ()
-    [(: field val)
-     (go `(set-field! field ,self val))]))
+                [(: field val)
+                 (go `(set-field! field ,self val))]))
 
 ;;;----------------------------------------------------------------------------
 ;;; Optional 3 definitions, if channels are insufficient
