@@ -245,25 +245,29 @@
                                       (go 
                                         `(let (msg ,,msg)
                                            h)
-                                        ))))))))
+                                        ))))))
 
-;; Qt-esque connect macro
-(define-syntax connect-message
-  (syntax-rules ()
-    [(register src-obj msg-type dst-obj handler)
-     (register-message-handler 
-       msg-type
-       '(if (eqv? ,src-obj (msg-src msg)) 
-            (send ,dst-obj ,handler (msg-args msg))))]))
+          ;; Qt-esque connect macro
+          (define-syntax connect-message
+            (syntax-rules ()
+              [(register src-obj msg-type dst-obj handler)
+               (register-message-handler 
+                 msg-type
+                 '(if (eqv? ,src-obj (msg-src msg)) 
+                      (send ,dst-obj ,handler (msg-args msg))))]))
 
 
 
-;; Create task to asynchronously set an object's field. set-field! 
-;; should be inherently threadsafe (just like normal set!). 
-;; Ex:
-;; (go (async my-field '(+ 1 2)))
-(define-syntax (async-set! obj field val)
-  `(set-field! field ,obj val))
+          ;; Create task to asynchronously set an object's field. set-field! 
+          ;; should be inherently threadsafe (just like normal set!). 
+          ;; Ex:
+          ;; (go (async my-field '(+ 1 2)))
+          (define-syntax async-set!
+            (syntax-rules ()
+              [(async-set! field val) 
+               `(set-field! field ,self val)]
+              [(async-set! obj field val)
+               `(set-field! field ,obj val)]))))
 
 
 
