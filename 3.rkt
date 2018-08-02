@@ -5,11 +5,80 @@
          data/queue
          delay-pure)
 
+
+;;;----------------------------------------------------------------------------
+;;; Top-level globals
+;;;----------------------------------------------------------------------------
+;; Number of threads 
 (define *num-dp-threads* 0)
+
+;; Current datapool environment data
 (define *datapool-environment-data* '())
 
 ;The following define is *only* used for syncing message handlers
 (define *dp-data-message-handler-sem* (make-semaphore 1))
+
+;; Number of times a coroutine is to be evaluated in a row before swapping tasks
+(define *dp-thread-continuous-eval-limit* 10) 
+
+;; Return val for when a coroutine is not yet completed
+(define *coroutine-alive* 'coroutine-alive)
+
+;; Placeholder define for yield 
+(define (yield val) val)
+
+;;;----------------------------------------------------------------------------
+;;; Pure/Stateless Functions
+;;;----------------------------------------------------------------------------  
+
+;; Coroutine definition  
+(define (make-coroutine procedure)
+  (define last-return values)
+  (define last-value #f)
+  (define (last-continuation _) 
+    (let ((result (procedure yield))) 
+      (last-return result)))
+
+  (define (yield value)
+    (call/cc (lambda (continuation)
+               (set! last-continuation continuation)
+               (set! last-value value)
+               (last-return value))))
+
+  (lambda args
+    (call/cc (lambda (return)
+               (set! last-return return)
+               (if (null? args)
+                   (last-continuation last-value)
+                   (apply last-continuation args))))))
+
+
+(define-syntax (define-coroutine stx)
+  (syntax-case stx ()
+               ((_ (name . args) . body )
+                #`(define (name . args)
+                    (make-generator 
+                      (lambda (#,(datum->syntax stx 'yield))
+                        . body))))))
+
+
+;; define a coroutine of a pure stateless function. These should always be 
+;; safe when executed asynchronously with a (go) call. The current 'coroutine' 
+;; portion of the definition *is* stateful, only the provide form is 
+;; guaranteed to be stateless
+(define-syntax-rule (func (name . params) body ...)
+                    (eval (if (pure/stateless (define (name . params) body ...))
+                              '(define-coroutine (name . params)
+                                                 (begin
+                                                   (yield coroutine-alive) 
+                                                   body
+                                                   ...))
+                              (begin 
+                                (error "Function is not pure: " 
+                                     (define (name . params) body ...))
+                                '()))))
+
+
 
 ;;;----------------------------------------------------------------------------
 ;;;basic channel functions
@@ -143,13 +212,31 @@
     (semaphore-wait (get-dp-queue-sem q-idx))
     (enqueue! (get-dp-queue q-idx) form)
     (semaphore-post (get-dp-queue-sem q-idx))
-    (thread-resume (get-dp-thread-pid q-idx))))
+    (thread-resume (get-dp-thread-pid q-idx))
+    #t))
+
+
+;; Evaluate given task, guarantees that any one task will not starve the 
+;; waiting tasks for cpu time by limiting continuous evaluations
+;; Returns: #t if task completed, #f if task not yet completed
+(define (dp-thread-eval-task thread-idx task evals-left)
+  (let ([ret (eval (task thread-idx))])
+    (if (eqv? ret *coroutine-alive*)
+        (if (> evals-left 0)
+            (dp-thread-eval-task thread-idx (- evals-left 1))
+            (begin 
+              (go task) ; place task at the back of a queue
+              #f)) ; task not yet completed
+        #t))) ; task completed
 
 
 ;; Eternal thread tail recursion of executing tasks
 (define (dp-thread thread-idx) 
-  ;execute the task we get
-  (eval (get-task thread-idx))  
+  ;execute the task we get 
+  (dp-thread-eval-task 
+    thread-idx 
+    (get-task thread-idx) 
+    *dp-thread-continuous-eval-limit*)
   (dp-thread thread-idx))
 
 
@@ -268,16 +355,6 @@
                `(set-field! field ,self val)]
               [(async-set! obj field val)
                `(set-field! field ,obj val)]))))
-
-
-
-;;;----------------------------------------------------------------------------
-;;; Pure/Stateless Functions
-;;;----------------------------------------------------------------------------
-;; define a pure stateless function or form. These should always be safe when 
-;; executed asynchronously with a (go) call
-(define-syntax-rule (definep (name . params) body ...)
-                    (define-pure/stateless (name . params) body ...))
 
 
 
