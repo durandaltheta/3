@@ -5,11 +5,26 @@
          data/queue
          delay-pure) 
 
+(provide datapool
+         close-dp 
+         get-dp-channel
+         channel
+         <-
+         ->
+         data%
+         message
+         func
+         danger-func!
+         test-true?
+         test-equal?
+         test-fail
+         test-pass)
+
 ;;;----------------------------------------------------------------------------
 ;;; Test Functions 
 ;;;---------------------------------------------------------------------------- 
-;; To run unit tests (define *run-3-tests* #t) before loading. To wait for user 
-;; input on test failure (define *run-3-tests-wait-before-cont* #t)
+;; To wait for user input on test failure 
+;; (define *run-3-tests-wait-before-cont* #t) 
 
 ;; Return #t if the given identifier is defined, else #f
 (define-syntax (defined? stx)
@@ -98,7 +113,7 @@
 
 ;; define a coroutine of a pure stateless coroutine. These should always be 
 ;; safe when executed asynchronously with a (go) call. The current 'coroutine' 
-;; portion of the definition *is* stateful, only the provide form is 
+;; portion of the definition *is* stateful, only the provided form is 
 ;; guaranteed to be stateless
 (define-syntax-rule (func (name . params) body ...)
                     (eval (if (pure/stateless (define (name . params) body ...))
@@ -134,7 +149,7 @@
 
 ;;;----------------------------------------------------------------------------
 ;;;basic channel functions
-;;;----------------------------------------------------------------------------
+;;;---------------------------------------------------------------------------- 
 ;;create an async channel, no size limit by default
 (define (channel [size #f]) (make-async-channel size))
 
@@ -351,7 +366,7 @@
 
 ;;;----------------------------------------------------------------------------
 ;;; classes & macros
-;;;----------------------------------------------------------------------------
+;;;---------------------------------------------------------------------------- 
 ;; message class 
 (define message%
   (class object%
@@ -426,10 +441,3 @@
                `(set-field! field ,self val)]
               [(async-set! obj field val)
                `(set-field! field ,obj val)]))))
-
-
-
-;;;---------------------------------------------------------------------------- 
-;;; Unit Tests
-;;;---------------------------------------------------------------------------- 
-(when (defined? *run-3-tests*) (load "3-ut.rkt"))
