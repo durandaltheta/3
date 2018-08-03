@@ -6,31 +6,19 @@
          delay-pure) 
 
 ;;;----------------------------------------------------------------------------
-;;; Forward Definitions
-;;;----------------------------------------------------------------------------
-(define (get-dp-thread-pid idx) (#f))
-(define (get-dp-thread-pid idx) #f)
-(define (get-dp-queue idx) #f)
-(define (get-dp-queue-sem idx) #f)
-(define (get-dp-message-handlers) #f)
-(define (get-dp-message-handlers-sem) #f)
-(define (get-dp-parent-channel) #f)
-(define (set-dp-message-handlers handlers) #f)
-(define (get-max-dp-q-idx) #f)
-(define (get-min-dp-q-idx) #f)
-(define (get-task-q-idx thread-idx) #f)
-(define (get-task thread-idx) #f)
-(define (go form) #f)
-(define (dp-thread-eval-task thread-idx task evals-left) #f)
-(define (dp-thread thread-idx) #f)
-(define (dp-thread-start) (thread-suspend (current-thread)))
-
-
-
-
-;;;----------------------------------------------------------------------------
-;;; Test Functions (to run tests (define *run-3-tests #t) before loading)
+;;; Test Functions 
 ;;;---------------------------------------------------------------------------- 
+;; To run unit tests (define *run-3-tests* #t) before loading. To wait for user 
+;; input on test failure (define *run-3-tests-wait-before-cont* #t)
+
+;; Return #t if the given identifier is defined, else #f
+(define-syntax (defined? stx)
+  (syntax-case stx ()
+               [(_ id)
+                (with-syntax ([v (identifier-binding #'id)])
+                             #''v)])) 
+
+
 ;; Return #t if the quoted form returns #t, else #f 
 (define (test-true? form)
   (if (eqv? form #t)
@@ -39,6 +27,8 @@
         #t)
       (begin
         (printf "FAIL: ~a == #f" form)
+        (when (defined? *run-3-tests-wait-before-cont*)
+          (read-line (current-input-port) 'any))
         #f)))
 
 
@@ -50,12 +40,16 @@
         #t)
       (begin
         (printf "FAIL: ~a == ~a" form-a form-b)
+        (when (defined? *run-3-tests-wait-before-cont*)
+          (read-line (current-input-port) 'any))
         #f))) 
 
 
 ;; Custom test fail
 (define (test-fail form)
-  (printf "FAIL: ~a" form))
+  (printf "FAIL: ~a" form)
+  (when (defined? *run-3-tests-wait-before-cont*)
+    (read-line (current-input-port) 'any)))
 
 
 ;; Custom test pass
@@ -63,25 +57,16 @@
   (printf "pass: ~a" form))
 
 
-;; Return #t if the given identifier is defined, else #f
-(define-syntax (defined? stx)
-  (syntax-case stx ()
-               [(_ id)
-                (with-syntax ([v (identifier-binding #'id)])
-                             #''v)]))
-
-
 
 ;;;----------------------------------------------------------------------------
 ;;; Pure/Stateless Coroutines
 ;;;----------------------------------------------------------------------------  
-;;**************************************
 ;; Forward define for yield 
 (define (yield val) val)
 
 
 ;; Coroutine definition  
-(define (make-coroutine procedure)
+(define (make-generator procedure)
   (define last-return values)
   (define last-value #f)
   (define (last-continuation _) 
@@ -110,40 +95,7 @@
                       (lambda (#,(datum->syntax stx 'yield))
                         . body))))))
 
-;;TEST
-;; Run tests for co-routines
-(when (defined? *run-3-tests*)
-  (define-coroutine
-    (co-test1) 
-    (yield 1)
-    (yield 2)
-    #f)
 
-
-  ;Test the coroutine runs correctly
-  (test-equal? (co-test1) 1)
-  (test-equal? (co-test1) 2)
-  (test-true? (not (co-test1)))
-
-  (define-coroutine
-    (co-test2 arg1 arg2)
-    (yield arg1)
-    (yield arg2)
-    #f)
-
-  ;Test coroutine can be run with arguments
-  (test-equal? (co-test2 "teststring" 'test)  "teststring")
-  (test-equal? (co-test2)  'test)
-  (test-true? (not co-test2))
-
-  ;Test coroutine can be rerun with new arguments
-  (test-equal? (co-test2 'test2 "teststring2")  'test2)
-  (test-equal? (co-test2)  "teststring2")
-  (test-true? (not co-test2)))
-;;**************************************
-
-
-;;**************************************
 ;; define a coroutine of a pure stateless coroutine. These should always be 
 ;; safe when executed asynchronously with a (go) call. The current 'coroutine' 
 ;; portion of the definition *is* stateful, only the provide form is 
@@ -163,55 +115,14 @@
                                       (define (name . params) body ...))))
                                 '()))))
 
-;;TEST
-;; Tests for (func) definitions
-(when (defined? *run-3-tests*)
-  (func
-    (co-test1) 
-    (yield 1)
-    (yield 2)
-    #f)
 
-  ;Test the coroutine runs correctly
-  (test-equal? (co-test1) 1)
-  (test-equal? (co-test1) 2)
-  (test-true? (not (co-test1)))
-
-  (func
-    (co-test2 arg1 arg2)
-    (yield arg1)
-    (yield arg2)
-    #f)
-
-  ;Test coroutine can be run with arguments
-  (test-equal? (co-test2 "teststring" 'test)  "teststring")
-  (test-equal? (co-test2)  'test)
-  (test-true? (not co-test2))
-
-  ;Test coroutine can be rerun with new arguments
-  (test-equal? (co-test2 'test2 "teststring2")  'test2)
-  (test-equal? (co-test2)  "teststring2")
-  (test-true? (not co-test2))
-
-  ;Should raise an exception due to the stateful (set!)
-  (with-handlers ([exn:fail:user? (lambda (e) (test-pass e))])
-                 (func 
-                   (co-test3 arg1)
-                   (yield arg1)
-                   (set! arg1 2)
-                   (yield arg2))
-                 (test-fail (co-test3 1))))
-;;**************************************
-
-
-;;**************************************
 ;; DO *NOT* USE IF YOU DON'T HAVE TO FOR PERFORMANCE REASONS
 ;; Define a coroutine with no purity/state checks. (func) can be slow because 
 ;; it fully expands the form checking for purity/statelessness. This rule skips
 ;; that check, which makes it *dangerous* when used in the multithreaded (go)
 ;; environment. Therefore, even if you use this function you should still 
 ;; validate its purity, manually if necessary.
-(define-syntax-rule (func! (name . params) body ...)
+(define-syntax-rule (danger-func! (name . params) body ...)
                     (define-coroutine (name . params)
                                       (begin
                                         (yield 'alive) 
@@ -219,107 +130,30 @@
                                         ...
                                         #f)))
 
-;;TEST
-;; Tests for (func!) definitions
-(when (defined? *run-3-tests*)
-  (func!
-    (co-test1) 
-    (yield 1)
-    (yield 2)
-    #f)
-
-  ;Test the coroutine runs correctly
-  (test-equal? (co-test1) 1)
-  (test-equal? (co-test1) 2)
-  (test-true? (not (co-test1)))
-
-  (func!
-    (co-test2 arg1 arg2)
-    (yield arg1)
-    (yield arg2)
-    #f)
-
-  ;Test coroutine can be run with arguments
-  (test-equal? (co-test2 "teststring" 'test)  "teststring")
-  (test-equal? (co-test2)  'test)
-  (test-true? (not co-test2))
-
-  ;Test coroutine can be rerun with new arguments
-  (test-equal? (co-test2 'test2 "teststring2")  'test2)
-  (test-equal? (co-test2)  "teststring2")
-  (test-true? (not co-test2))
-
-  ;Should *not* raise an exception due to the stateful (set!)
-  (with-handlers ([exn:fail:user? (lambda (e) (test-fail e))])
-                 (func! 
-                   (co-test3 arg1)
-                   (yield arg1)
-                   (set! arg1 2)
-                   (yield arg2))
-                 (test-equal? (co-test3 1) 1)
-                 (test-equal? (co-test3) 2)
-                 (test-true? (not (co-test3)))))
-;;**************************************
-
 
 
 ;;;----------------------------------------------------------------------------
 ;;;basic channel functions
 ;;;----------------------------------------------------------------------------
-;;**************************************
 ;;create an async channel, no size limit by default
 (define (channel [size #f]) (make-async-channel size))
 
-;;TEST
-(when (defined? *run-3-tests*)
-  (let ([ch (channel)])
-    (test-true? (async-channel? ch))))
-;;**************************************
 
-
-;;**************************************
 ;;channel get, blocks by default
 (define (<- ch [block #t])
   (if block
       (async-channel-get ch)
       (async-channel-try-get ch)))
 
-;;TEST
-(when (defined? *run-3-tests*)
-  (let ([ch (channel)])
-    (async-channel-put ch "teststring")
-    (let ([ret (<- ch #f)])
-      (test-equal? ret "teststring")))
 
-  (let ([ch (channel)])
-    (async-channel-put ch "teststring2")
-    (let ([ret (<- ch)])
-      (test-equal? ret "teststring2"))))
-;;**************************************
-
-
-;;**************************************
 ;;channel put
 (define (-> ch item)
   (async-channel-put ch item))
 
-;;TEST
-(when (defined? *run-3-tests*)
-  (let ([ch (channel)])
-    (-> ch "teststring")
-    (let ([ret (<- ch #f)])
-      (test-equal? ret "teststring")))
-
-  (let ([ch (channel)])
-    (-> ch "teststring2")
-    (let ([ret (<- ch)])
-      (test-equal? ret "teststring2"))))
-;;**************************************
-
 
 
 ;;;--------------------------------------------------------------------------
-;;; Global forward declarations and globals
+;;; Globals and global forward declarations
 ;;;--------------------------------------------------------------------------
 ;; Number of threads 
 (define *num-dp-threads* #f)
@@ -330,12 +164,15 @@
 ;; Number of times a coroutine is to be evaluated in a row before swapping tasks
 (define *dp-thread-continuous-eval-limit* 10) 
 
+;; Forward definitions
+(define (dp-thread-start) (thread-suspend (current-thread)))
+(define (go form) #f)
+
 
 
 ;;;--------------------------------------------------------------------------
 ;;; Public Datapool Functions
 ;;;--------------------------------------------------------------------------
-;;**************************************
 ;;create datapool data 
 (define (make-dp-data num-threads) 
   (vector 
@@ -356,87 +193,10 @@
   (for ([i (vector-length (vector-ref dp-data 0))])
        (kill-thread (car (vector-ref (vector-ref dp-data 0) i)))))
 
-;;TEST
-(when (defined? *run-3-tests*)
-  ;Sanity test
-  (test-equal? (get-dp-data) #f)
 
-  ;Make a datapool
-  (let ([num-threads 2]
-        [*datapool-environment-data* (make-dp-data num-threads)])
-
-    ;Verify threads exist
-    (for ([i num-threads])
-         (test-true? 
-           (thread? 
-             (car (vector-ref (vector-ref (get-dp-data) 0) i)))))
-
-    ;Verify the threads are alive
-    (for ([i num-threads])
-         (test-true? (not (thread-dead? 
-                            (car 
-                              (vector-ref 
-                                (vector-ref (get-dp-data) 0) 
-                                i))))))
-
-    ;Verify task queues exist
-    (for ([i num-threads])
-         (test-true? 
-           (queue? 
-             (cdr (vector-ref (vector-ref (get-dp-data) 0) i)))))
-
-    ;Verify task queue semaphores exist
-    (for ([i num-threads])
-         (test-true? 
-           (semaphore? 
-             (cddr (vector-ref (vector-ref (get-dp-data) 0) i)))))
-
-    ;Verify hash table of message handlers exists
-    (test-true? 
-      (hash? 
-        (car (vector-ref (get-dp-data) 1))))
-
-    ;Verify hash table semaphore exists
-    (test-true? 
-      (semaphore? 
-        (cdr (vector-ref (get-dp-data) 1))))
-
-    ;Verify parent->dp channel exists
-    (test-true? 
-      (async-channel? 
-        (car (vector-ref (get-dp-data) 2))))
-
-    ;Verify dp->parent channel exists
-    (test-true? 
-      (async-channel? 
-        (cdr (vector-ref (get-dp-data) 2))))
-
-    ;Verify we can kill the datapool environment
-    (close-dp *datapool-environment-data*)
-
-    (for ([i num-threads])
-         (test-true? (thread-dead? 
-                       (car 
-                         (vector-ref 
-                           (vector-ref (get-dp-data) 0) 
-                           i)))))))
-;;**************************************
-
-
-;;**************************************
 ;; Get the communication parent->datapool channel
 (define (get-dp-channel dp-data) 
   (car (vector-ref dp-data 2)))
-
-;;TEST
-(when (defined? *run-3-tests*)
-  (let ([num-threads 2]
-        [*datapool-environment-data* (make-dp-data num-threads)])
-
-    ;Check that parent->dp channel exists
-    (test-true? (async-channel? (get-dp-channel *datapool-environment-data*)))
-    (close-dp *datapool-environment-data*)))
-;;**************************************
 
 
 
@@ -571,9 +331,9 @@
 
 
 
-;;;--------------------------------------------------------------------------
+;;;----------------------------------------------------------------------------
 ;;; Create Datapool
-;;;--------------------------------------------------------------------------
+;;;---------------------------------------------------------------------------- 
 ;; Create a datapool environment. Setup worker threads and begin execution of 
 ;; the user defined main form. Returns datapool environment data vector needed
 ;; as the argument for management functions like (close-dp).
@@ -612,36 +372,38 @@
   (class* object% (data-interface)
           (super-new)
 
-          (define/private (register-message-handler msg-type callback-form)
-                          (begin
-                            (semaphore-wait (get-dp-message-handlers-sem))
-                            (let ([msg-handlers (hash-ref (get-dp-message-handlers)
-                                                          msg-type 
-                                                          #f)])
-                              (if (eqv? #f msg-handlers)
-                                  (set-dp-message-handlers 
-                                    (hash-set msg-handlers
-                                              msg-type 
-                                              '(callback-form)))
-                                  (set-dp-message-handlers 
-                                    (hash-set msg-handlers
-                                              msg-type 
-                                              (append msg-handlers '(callback-form))))))
-                            (semaphore-post (get-dp-message-handlers-sem))
-                            #t))
+          (define/private 
+            (register-message-handler msg-type callback-form)
+            (begin
+              (semaphore-wait (get-dp-message-handlers-sem))
+              (let ([msg-handlers (hash-ref (get-dp-message-handlers)
+                                            msg-type 
+                                            #f)])
+                (if (eqv? #f msg-handlers)
+                    (set-dp-message-handlers 
+                      (hash-set msg-handlers
+                                msg-type 
+                                '(callback-form)))
+                    (set-dp-message-handlers 
+                      (hash-set msg-handlers
+                                msg-type 
+                                (append msg-handlers '(callback-form))))))
+              (semaphore-post (get-dp-message-handlers-sem))
+              #t))
 
           ;; Send a message to connected handlers in the current datapool
-          (define/private (emit msg)
-                          (go
-                            `(let ([handlers (hash-ref 
-                                               (get-dp-message-handlers) 
-                                               (msg-type msg))])
-                               (when (not (eqv? handlers #f))
-                                 (for ([h handlers])
-                                      (go 
-                                        `(let (msg ,,msg)
-                                           h)
-                                        ))))))
+          (define/private 
+            (emit msg)
+            (go
+              `(let ([handlers (hash-ref 
+                                 (get-dp-message-handlers) 
+                                 (msg-type msg))])
+                 (when (not (eqv? handlers #f))
+                   (for ([h handlers])
+                        (go 
+                          `(let (msg ,,msg)
+                             h)
+                          ))))))
 
           ;; Qt-esque connect macro
           (define-syntax connect-message
@@ -668,9 +430,6 @@
 
 
 ;;;---------------------------------------------------------------------------- 
-;;; Feature Test
+;;; Unit Tests
 ;;;---------------------------------------------------------------------------- 
-;TODO figure out how to get argv & argc 
-;(define dp1 (datapool 4 '(main argv argc)))
-;(let ([ch (get-dp-channel dp1)]) 
-;(<- ch))
+(when (defined? *run-3-tests*) (load "3-ut.rkt"))
