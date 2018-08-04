@@ -133,7 +133,7 @@
                               '()))))
 
 
-;; DO *NOT* USE IF YOU DON'T HAVE TO FOR PERFORMANCE REASONS
+;; DO *NOT* USE UNLESS REQUIRED FOR PERFORMANCE REASONS
 ;; Define a coroutine with no purity/state checks. (func) can be slow because 
 ;; it fully expands the form checking for purity/statelessness. This rule skips
 ;; that check, which makes it *dangerous* when used in the multithreaded (go)
@@ -280,7 +280,10 @@
       (semaphore-wait (get-dp-data-objects-sem))
       (hash (get-dp-data-objects) key obj)
       (semaphore-post (get-dp-data-objects-sem))
-      (send (get-dp-data-object key) run)
+      (define-coroutine 
+        (run-handler)
+        (send (get-dp-data-object key) run))
+      (go '(run-handler))
       #t)))
 
 
@@ -442,8 +445,6 @@
 ;;;----------------------------------------------------------------------------
 ;;; classes & macros
 ;;;---------------------------------------------------------------------------- 
-
-
 ;; Data object interface
 (define data-interface (interface () 
                                   register-message-handler 
@@ -451,84 +452,89 @@
 
 ;; Data object class
 (define data%
-  (class* object% 
-          (data-interface)
-          (init
-            [key key])
-          (super-new)
+  (class* 
+    object% 
+    (data-interface)
+    (init
+      [key key])
+    (super-new)
 
-          ;; message class 
-          (define/private message%
-                          (class object%
-                                 (init src
-                                       type
-                                       args)
-                                 (super-new)))
+    ;; message subclass 
+    (define/private message%
+                    (class object%
+                           (init src
+                                 type
+                                 args)
+                           (super-new)))
 
-          (define (message inp-type inp-args)
-            (new (message% [src key] [type inp-type] [args inp-args])))
+    (define (message inp-type inp-args)
+      (new (message% [src key] [type inp-type] [args inp-args])))
 
-          (define/private 
-            (register-message-handler msg-type callback-form)
-            (begin
-              (semaphore-wait (get-dp-message-handlers-sem))
-              (let ([msg-handlers (hash-ref (get-dp-message-handlers)
-                                            msg-type 
-                                            #f)])
-                (if (eqv? #f msg-handlers)
-                  (set-dp-message-handlers 
-                    (hash-set msg-handlers
-                              msg-type 
-                              '(callback-form)))
-                  (set-dp-message-handlers 
-                    (hash-set msg-handlers
-                              msg-type 
-                              (append msg-handlers '(callback-form))))))
-              (semaphore-post (get-dp-message-handlers-sem))
-              #t))
+    (define/private 
+      (register-message-handler msg-type callback-form)
+      (begin
+        (semaphore-wait (get-dp-message-handlers-sem))
+        (let ([msg-handlers (hash-ref (get-dp-message-handlers)
+                                      msg-type 
+                                      #f)])
+          (if (eqv? #f msg-handlers)
+            (set-dp-message-handlers 
+              (hash-set msg-handlers
+                        msg-type 
+                        '(callback-form)))
+            (set-dp-message-handlers 
+              (hash-set msg-handlers
+                        msg-type 
+                        (append msg-handlers '(callback-form))))))
+        (semaphore-post (get-dp-message-handlers-sem))
+        #t))
 
-          ;; Send a message to connected handlers in the current datapool
-          (define/private 
-            (emit msg)
-            (go
-              `(let ([handlers (hash-ref 
-                                 (get-dp-message-handlers) 
-                                 (msg-type msg))])
-                 (when (not (eqv? handlers #f))
-                   (for 
-                     ([h handlers])
-                     (go 
-                       `(let (msg ,,msg)
-                          h)))))))
+    ;; Send a message to connected handlers in the current datapool
+    (define/private 
+      (emit msg)
+      (go
+        `(let ([handlers (hash-ref 
+                           (get-dp-message-handlers) 
+                           (msg-type msg))])
+           (when (not (eqv? handlers #f))
+             (for 
+               ([h handlers])
+               (go 
+                 `(let (msg ,,msg)
+                    h)))))))
 
-          ;; Qt-esque connect macro
-          (define-syntax connect-message
-            (syntax-rules ()
-                          [(register src-obj-key msg-type dst-obj-key handler)
-                           (register-message-handler 
-                             msg-type
-                             (begin
-                               (define-coroutine
-                                 (handler-accessor)
-                                 (if (eqv? (get-dp-data-object dst-obj-key) #f)
-                                   #f
-                                   (send 
-                                     (get-dp-data-object dst-obj-key) 
-                                     handler 
-                                     (class-field-accessor msg args))))
-                               '(handler-accessor)))]))
+    ;; Qt-esque connect macro
+    (define-syntax connect-message
+      (syntax-rules ()
+                    [(register src-obj-key msg-type dst-obj-key handler)
+                     (register-message-handler 
+                       msg-type
+                       (begin
+                         (define-coroutine
+                           (handler-accessor)
+                           (if (eqv? (get-dp-data-object dst-obj-key) #f)
+                             #f
+                             (send 
+                               (get-dp-data-object dst-obj-key) 
+                               handler 
+                               (class-field-accessor msg args))))
+                         '(handler-accessor)))]))
 
 
-          ;; Create task to asynchronously set an object's field. set-field! 
-          ;; should be inherently threadsafe (just like normal set!). 
-          ;; Ex:
-          ;; (go (set-datum! my-field '(+ 1 2)))
-          (define-syntax set-datum!
-            (syntax-rules ()
-                          [(set-datum! field val) 
-                           `(set-field! field (get-object ,key) val)]
-                          [(set-datum! key field val)
-                           `(set-field! field (get-object ,key) val)]))))
+    ;; Create task to asynchronously set an object's field. set-field! 
+    ;; should be inherently threadsafe (just like normal set!). 
+    ;; Ex:
+    ;; (go (set-datum! my-field '(+ 1 2)))
+    (define-syntax set-datum!
+      (syntax-rules ()
+                    [(set-datum! field val) 
+                     `(begin
+                        (set-field! field (get-object ,key) val)
+                        #f)]
+                    [(set-datum! key field val)
+                     `(begin
+                        (set-field! field (get-object ,key) val)
+                        #f)]))))
 
 
 ;; Create and register a new data object with the datapool. Do not (emit), 
