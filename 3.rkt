@@ -5,18 +5,19 @@
          data/queue
          delay-pure) 
 
-(provide datapool
-         make-datapool-data
-         close-dp 
-         channel
-         <-
-         ->
-         get-datapool-channel
-         send-to-datapool-parent
+(provide datapool ;start a datapool with given environment data and form to execute
+         make-datapool-data ;make datapool environment data
+         close-dp ;kill all threads in the datapool
+         channel ;create a channel object
+         <- ;get form from a channel
+         -> ;send form into a channel
+         get-datapool-channel ;get the channel to send messages into the datapool
+         send-to-datapool-parent ;send data to the datapool's parent scope
          data ;create data object and register it in the datapool
-         message
-         func
-         danger-func!
+         message ;create a message object with a given type and arguments
+         definep ;define a pure & stateless function
+         func ;define a pure & stateless coroutine
+         danger-func! ;define a coroutine
          test-true?
          test-equal?
          test-fail
@@ -108,29 +109,40 @@
   (syntax-case stx ()
                ((_ (name . args) . body )
                 #`(define (name . args)
-                    (make-generator 
+                    (make-generator
                       (lambda (#,(datum->syntax stx 'yield))
                         . body))))))
 
 
-;; define a coroutine of a pure stateless coroutine. These should always be 
+
+;; Define a namespace so eval can run correctly
+(define-namespace-anchor eval-anchor)
+(define eval-namespace (namespace-anchor->namespace eval-anchor))
+
+
+;; Define a pure & stateless function
+(define-syntax-rule (definep (name . params) body ...)
+                    (define-pure/stateless (name . params) body ...))
+
+
+;; Define a coroutine of a pure stateless coroutine. These should always be 
 ;; safe when executed asynchronously with a (go) call. The current 'coroutine' 
 ;; portion of the definition *is* stateful, only the provided form is 
-;; guaranteed to be stateless
+;; guaranteed to be stateless 
 (define-syntax-rule (func (name . params) body ...)
                     (eval (if (pure/stateless (define (name . params) body ...))
                             '(define-coroutine (name . params)
-                                               (begin
-                                                 (yield 'alive) 
-                                                 body
-                                                 ...
-                                                 #f))
+                                                    (begin
+                                                      (yield 'alive) 
+                                                      body
+                                                      ...
+                                                      #f))
                             (begin
                               (raise 
                                 (make-exn:fail:user
                                   '("Function is not pure: " 
                                     (define (name . params) body ...))))
-                              '()))))
+                              '())) eval-namespace))
 
 
 ;; DO *NOT* USE UNLESS REQUIRED FOR PERFORMANCE REASONS
@@ -180,13 +192,6 @@
 
 ;; global counter for data object hash keys
 (define *data-obj-key-src* 0)
-
-;; Forward definitions
-(define (go form) #f)
-(define (dp-thread-start) (thread-suspend (current-thread)))
-(define (dp-thread thread-idx) #f)
-(define (dp-thread-eval-task thread-idx task evals-left) #f)
-
 
 
 ;;;--------------------------------------------------------------------------
@@ -262,14 +267,48 @@
 
 
 ;; Get the data objects semaphore
-(define (get-dp-data-objects-sem/intern)
+(define (get-dp-data-objects-sem)
   (vector-ref (vector-ref (get-dp-data) 1) 2)) 
 
 
 ;; Generate a new data object hash key
 (define (gen-dp-data-obj-key) 
-  (set! (+ *data-obj-key-src* 1))
+  (set! *data-obj-key-src* (+ *data-obj-key-src* 1))
   *data-obj-key-src*)
+
+
+;; Get the index of the fullest thread task queue
+(define (get-max-dp-q-idx)
+  (define longest '((queue-length (get-dp-queue 0)) 0))
+  (when (> (get-num-dp-threads) 1)
+    (for ([i (in-range 1 (get-num-dp-threads))])
+         (let ([cur-q-len (queue-length (get-dp-queue i))])
+           (when (> (car longest) cur-q-len)
+             (begin
+               (set! longest '(cur-q-len i)))))))
+  (cdr longest))
+
+
+;; Get the index of the emptiest thread task queue
+(define (get-min-dp-q-idx)
+  (define shortest '((queue-length (get-dp-queue 0)) 0))
+  (when (> (get-num-dp-threads) 1)
+    (for ([i (in-range 1 (get-num-dp-threads))])
+         (let ([cur-q-len (queue-length (get-dp-queue i))])
+           (when (< (car shortest) cur-q-len)
+             (begin
+               (set! shortest '(cur-q-len i)))))))
+  (cdr shortest))
+
+
+;;Enqueues func expresion to the emptiest thread queue and resumes the thread
+(define (go form)
+  (let ([q-idx (get-min-dp-q-idx)])
+    (semaphore-wait (get-dp-queue-sem q-idx))
+    (enqueue! (get-dp-queue q-idx) form)
+    (semaphore-post (get-dp-queue-sem q-idx))
+    (thread-resume (get-dp-thread-pid q-idx))
+    #t))
 
 
 ;; Hash new data object
@@ -332,30 +371,6 @@
   (semaphore-post (get-dp-parent-ch-sem)))
 
 
-;; Get the index of the fullest thread task queue
-(define (get-max-dp-q-idx)
-  (define longest '((queue-length (get-dp-queue 0)) 0))
-  (when (> (get-num-dp-threads) 1)
-    (for ([i (in-range 1 (get-num-dp-threads))])
-         (let ([cur-q-len (queue-length (get-dp-queue i))])
-           (when (> (car longest) cur-q-len)
-             (begin
-               (set! longest '(cur-q-len i)))))))
-  (cdr longest))
-
-
-;; Get the index of the emptiest thread task queue
-(define (get-min-dp-q-idx)
-  (define shortest '((queue-length (get-dp-queue 0)) 0))
-  (when (> (get-num-dp-threads) 1)
-    (for ([i (in-range 1 (get-num-dp-threads))])
-         (let ([cur-q-len (queue-length (get-dp-queue i))])
-           (when (< (car shortest) cur-q-len)
-             (begin
-               (set! shortest '(cur-q-len i)))))))
-  (cdr shortest))
-
-
 ;; Return thread's queue index if not empty, otherwise gets the index of the 
 ;; fullest queue.
 (define (get-task-q-idx thread-idx)
@@ -378,25 +393,18 @@
     (task)))
 
 
-;;Enqueues func expresion to the emptiest thread queue and resumes the thread
-(define (go form)
-  (let ([q-idx (get-min-dp-q-idx)])
-    (semaphore-wait (get-dp-queue-sem q-idx))
-    (enqueue! (get-dp-queue q-idx) form)
-    (semaphore-post (get-dp-queue-sem q-idx))
-    (thread-resume (get-dp-thread-pid q-idx))
-    #t))
-
-
-;; Thread startup function
-(define (dp-thread-start)
-  (let ([pid (current-thread)])
-    (thread-suspend pid)
-    (define thread-num 0)
-    (for ([i (get-num-dp-threads)])
-         (when (eqv? (get-dp-thread-pid i) pid) 
-           (set! thread-num i)))
-    (dp-thread thread-num)))
+;; Evaluate given task, guarantees that any one task will not starve the 
+;; waiting tasks for cpu time by limiting continuous evaluations
+;; Returns: #t if task completed, #f if task not yet completed
+(define (dp-thread-eval-task thread-idx task evals-left)
+  (let ([ret (task)])
+    (if (eqv? ret 'alive)
+      (if (> evals-left 0)
+        (dp-thread-eval-task thread-idx (- evals-left 1))
+        (begin 
+          (go task) ; place task at the back of a queue
+          #f)) ; task not yet completed
+      #t))) ; task completed
 
 
 ;; Eternal thread tail recursion of executing tasks
@@ -409,18 +417,15 @@
   (dp-thread thread-idx))
 
 
-;; Evaluate given task, guarantees that any one task will not starve the 
-;; waiting tasks for cpu time by limiting continuous evaluations
-;; Returns: #t if task completed, #f if task not yet completed
-(define (dp-thread-eval-task thread-idx task evals-left)
-  (let ([ret (eval (task thread-idx))])
-    (if (eqv? ret 'alive)
-      (if (> evals-left 0)
-        (dp-thread-eval-task thread-idx (- evals-left 1))
-        (begin 
-          (go task) ; place task at the back of a queue
-          #f)) ; task not yet completed
-      #t))) ; task completed
+;; Thread startup function
+(define (dp-thread-start)
+  (let ([pid (current-thread)])
+    (thread-suspend pid)
+    (define thread-num 0)
+    (for ([i (get-num-dp-threads)])
+         (when (eqv? (get-dp-thread-pid i) pid) 
+           (set! thread-num i)))
+    (dp-thread thread-num)))
 
 
 
@@ -436,7 +441,7 @@
         [*data-obj-key-src* 0])
     (if (> num-threads 0)
       (begin 
-        (go '(dp-main)) ;Execute the provided dp-main function
+        (go dp-main) ;Execute the provided dp-main function
         (get-dp-data))
       #f)))
 
@@ -459,6 +464,10 @@
       [key key])
     (super-new)
 
+
+    ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+    ;; Private Methods and Fields
+    ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
     ;; message subclass 
     (define/private message%
                     (class object%
@@ -467,9 +476,7 @@
                                  args)
                            (super-new)))
 
-    (define (message inp-type inp-args)
-      (new (message% [src key] [type inp-type] [args inp-args])))
-
+    ;; Register a message callback
     (define/private 
       (register-message-handler msg-type callback-form)
       (begin
@@ -492,16 +499,21 @@
     ;; Send a message to connected handlers in the current datapool
     (define/private 
       (emit msg)
-      (go
-        `(let ([handlers (hash-ref 
-                           (get-dp-message-handlers) 
-                           (msg-type msg))])
-           (when (not (eqv? handlers #f))
-             (for 
-               ([h handlers])
-               (go 
-                 `(let (msg ,,msg)
-                    h)))))))
+      (let ([handlers (hash-ref 
+                        (get-dp-message-handlers) 
+                        (get-field type msg))])
+        (when (not (eqv? handlers #f))
+          (for 
+            ([h handlers])
+            (go (lambda ()
+                  (let ([msg msg])
+                    (h))))))))
+
+    ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+    ;; Public Methods and Fields
+    ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+    (define/public (message inp-type inp-args)
+                   (new (message% [src key] [type inp-type] [args inp-args])))
 
     ;; Qt-esque connect macro
     (define-syntax connect-message
@@ -517,24 +529,43 @@
                              (send 
                                (get-dp-data-object dst-obj-key) 
                                handler 
-                               (class-field-accessor msg args))))
-                         '(handler-accessor)))]))
+                               (get-field args msg)))
+                           handler-accessor)))]))
 
+    ;; Return a field from the object
+    (define/public (get-datum field)
+                   (get-field field self))
 
     ;; Create task to asynchronously set an object's field. set-field! 
     ;; should be inherently threadsafe (just like normal set!). 
     ;; Ex:
-    ;; (go (set-datum! my-field '(+ 1 2)))
+    ;; (func 
+    ;; (go
+    ;;   (begin
+    ;;     (define-coroutine 
+    ;;       ()
+    ;;       (set-datum! my-field '(+ 1 2)))
     (define-syntax set-datum!
       (syntax-rules ()
                     [(set-datum! field val) 
-                     `(begin
-                        (set-field! field (get-object ,key) val)
-                        #f)]
+                     (begin
+                       (define-coroutine
+                         (set-handler)
+                         (let ([obj (get-object key)])
+                           (if (eqv? obj #f)
+                             #f
+                             (set-field! field (get-object key) val))))
+                       set-handler)]
                     [(set-datum! key field val)
-                     `(begin
-                        (set-field! field (get-object ,key) val)
-                        #f)]))))
+                     (begin
+                       (define-coroutine
+                         (set-handler)
+                         (let ([obj (get-object key)])
+                           (if (eqv? obj #f)
+                             #f
+                             (set-field! field (get-object key) val))))
+                       set-handler)]))))
+
 
 
 ;; Create and register a new data object with the datapool. Do not (emit), 
@@ -550,5 +581,6 @@
                                         (init-rest)
                                         (define (run)
                                           body
-                                          ...))])
+                                          ...)
+                                        (get-datum key))])
                            (new (new-data%) . params)))))
