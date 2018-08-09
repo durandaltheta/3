@@ -13,7 +13,8 @@
          -> ;send form into a channel
          get-datapool-channel ;get the channel to send messages into the dp
          send-to-datapool-parent ;send data to the datapool's parent scope
-         data ;create data object and register it in the datapool
+         data ;create data object and register it in the datapool 
+         get-dp-data-object ;get an object via its key
          message% ;create a message object with a given type and arguments
          go ;place a coroutine in a queue to be executed by a thread
          definep ;define a pure & stateless function
@@ -22,7 +23,8 @@
          test-true?
          test-equal?
          test-fail
-         test-pass)
+         test-pass
+         run-unit-tests)
 
 ;;;----------------------------------------------------------------------------
 ;;; Test Functions 
@@ -193,14 +195,14 @@
 
 ;; global counter for data object hash keys
 (define *data-obj-key-src* 0)
-
+(define *data-obj-free-key-q* #f)
 
 ;;;--------------------------------------------------------------------------
 ;;; Public Datapool Functions
 ;;;--------------------------------------------------------------------------
 ;;create datapool data 
 (define (make-datapool-data num-threads) 
-  (box ;by reference
+  (box ;return a 'by reference' symbol
     (vector 
       ;thread id's, queues, and semaphores
       (make-vector 
@@ -225,9 +227,9 @@
   (unbox *datapool-environment-data*))
 
 
-;; Return number of threads 
+;; Return number of threads in the datapool
 (define (get-num-dp-threads) 
-  (vector-length (vector-ref (get-dp-data))))
+  (vector-length (vector-ref (get-dp-data) 0)))
 
 
 ;;kill all threads in a datapool
@@ -248,7 +250,7 @@
 ;;; Start private datapool thread function defines
 ;;;-------------------------------------------------------------------------- 
 ;; Get a thread pid at provided index
-(define (get-dp-thread-pid idx)
+(define (get-dp-thread idx)
   (vector-ref (vector-ref (vector-ref (get-dp-data) 0) idx) 0))
 
 
@@ -272,10 +274,24 @@
   (vector-ref (vector-ref (get-dp-data) 1) 2)) 
 
 
+;; Add a recycled data object key to the container queue
+(define (add-free-dp-data-key key) 
+  (when (queue? *data-obj-free-key-q* #f)
+    (enqueue! *data-obj-free-key-q* key)))
+
+
 ;; Generate a new data object hash key
 (define (gen-dp-data-obj-key) 
-  (set! *data-obj-key-src* (+ *data-obj-key-src* 1))
-  *data-obj-key-src*)
+  (let ([ret *data-obj-key-src*])
+    (if (> 
+          (if (queue? *data-obj-free-key-q* #f)
+              (queue-length *data-obj-free-key-q*)
+              0) 
+          0)
+        (dequeue! *data-obj-free-key-q*)
+        (let ()
+          (set! *data-obj-key-src* (+ *data-obj-key-src* 1))
+          ret))))
 
 
 ;; Get the index of the fullest thread task queue
@@ -308,7 +324,7 @@
     (semaphore-wait (get-dp-queue-sem q-idx))
     (enqueue! (get-dp-queue q-idx) form)
     (semaphore-post (get-dp-queue-sem q-idx))
-    (thread-resume (get-dp-thread-pid q-idx))
+    (thread-resume (get-dp-thread q-idx))
     #t))
 
 
@@ -329,11 +345,11 @@
 
 ;; Get a data object from the hash
 (define (get-dp-data-object key)
-  (hash-ref (get-dp-data-objects) key))
+  (hash-ref (get-dp-data-objects) key #f))
 
 
 ;; Delete and remove a data object from the hash
-(define (delete-data key)
+(define (delete-dp-data-object key)
   (semaphore-wait (get-dp-data-objects-sem))
   (hash-set! (get-dp-data-objects) key #f)
   (semaphore-post (get-dp-data-objects-sem)))
@@ -424,7 +440,7 @@
     (thread-suspend pid)
     (define thread-num 0)
     (for ([i (get-num-dp-threads)])
-         (when (eqv? (get-dp-thread-pid i) pid) 
+         (when (eqv? (get-dp-thread i) pid) 
            (set! thread-num i)))
     (dp-thread thread-num)))
 
@@ -439,12 +455,13 @@
 (define (datapool datapool-data dp-main)
   (let ([*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
         [*datapool-environment-data* datapool-data]
-        [*data-obj-key-src* 0])
+        [*data-obj-key-src* 0]
+        [*data-obj-free-key-q* (make-queue)])
     (if (> (get-num-dp-threads) 0)
-        (begin 
+        (let ()
           (go dp-main) ;Execute the provided dp-main function
           (get-dp-data))
-        #f)))
+        #f))) ;Currently, must have 1 thread for datapool execution
 
 
 
@@ -470,9 +487,10 @@
   (class* 
     object% 
     (data-interface)
-    (init-field key)
+    (init-field 
+      key
+      [deleted #f])
     (super-new)
-
 
     ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
     ;; Private Methods and Fields
@@ -480,93 +498,140 @@
     ;; Register a message callback
     (define/private 
       (register-message-handler msg-type callback-form)
-      (begin
-        (semaphore-wait (get-dp-message-handlers-sem))
-        (let ([msg-handlers (hash-ref (get-dp-message-handlers)
-                                      msg-type 
-                                      #f)])
-          (if (eqv? #f msg-handlers)
-              (set-dp-message-handlers 
-                (hash-set msg-handlers
-                          msg-type 
-                          callback-form))
-              (set-dp-message-handlers 
-                (hash-set msg-handlers
-                          msg-type 
-                          (append msg-handlers '(callback-form))))))
-        (semaphore-post (get-dp-message-handlers-sem))
-        #t))
+      (if (not (deleted?))
+          (let ()
+            (semaphore-wait (get-dp-message-handlers-sem))
+            (let ([msg-handlers (hash-ref (get-dp-message-handlers)
+                                          msg-type 
+                                          #f)])
+              (if (eqv? #f msg-handlers)
+                  (set-dp-message-handlers 
+                    (hash-set msg-handlers
+                              msg-type 
+                              callback-form))
+                  (set-dp-message-handlers 
+                    (hash-set msg-handlers
+                              msg-type 
+                              (append msg-handlers '(key callback-form))))))
+            (semaphore-post (get-dp-message-handlers-sem))
+            #t)
+          'deleted))
 
     ;; Send a message to connected handlers in the current datapool
     (define/private 
       (send msg)
-      (let ([handlers (hash-ref 
-                        (get-dp-message-handlers) 
-                        (get-field type msg))])
-        (when (not (eqv? handlers #f))
-          (for 
-            ([h handlers])
-            (go (lambda ()
-                  (let ([msg msg])
-                    (h))))))))
+      (if (not (deleted?))
+          (let ([handlers (hash-ref 
+                            (get-dp-message-handlers) 
+                            (get-field type msg))])
+            (when (not (eqv? handlers #f))
+              (for 
+                ([hpair handlers])
+                (go (lambda ()
+                      (let ([msg msg]
+                            [h (cdr hpair)])
+                        (h)))))))
+          'deleted))
 
     ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
     ;; Public Methods and Fields
     ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+    ;; Set the current data object to the deleted state (won't accept any more
+    ;;
+    (define/public (delete)
+                   (set! deleted #t))
+
+    ;; Check whether object is still valid
+    (define/private
+      (deleted?)
+      deleted)
+
+    ;; Create a message object 
     (define/public (message inp-type inp-args)
                    (make-object message% key inp-type inp-args))
 
     ;; Qt-esque connect macro
-    (define-syntax connect-message
+    (define-syntax receive
       (syntax-rules ()
-        [(mailbox src-obj-key msg-type dst-obj-key handler)
-         (register-message-handler 
-           msg-type
-           (let ()
-             (define-coroutine
-               (handler-accessor)
-               (if (eqv? (get-dp-data-object dst-obj-key) #f)
-                   #f
-                   (send 
-                     (get-dp-data-object dst-obj-key) 
-                     handler 
-                     (get-field args msg))))
-             handler-accessor))]))
-
-    ;; Return a field from the object
-    (define/public (get-datum field)
-                   (get-field field this))
+        [(receive src-obj-key msg-type dst-obj-key handler)
+         (if (not (deleted?))
+             (register-message-handler 
+               msg-type
+               (let ()
+                 (define-coroutine
+                   (handler-accessor)
+                   (if (eqv? (get-dp-data-object dst-obj-key) #f)
+                       #f
+                       (send 
+                         (get-dp-data-object dst-obj-key) 
+                         handler 
+                         (get-field args msg))))
+                 handler-accessor))
+             'deleted)]))
 
     ;; Create task to asynchronously set an object's field. set-field! 
     ;; should be inherently threadsafe (just like normal set!). 
     ;; Ex:
-    ;; (func 
-    ;; (go
-    ;;   (begin
-    ;;     (define-coroutine 
-    ;;       ()
-    ;;       (set-datum! my-field '(+ 1 2)))
+    ;; (func (gimme-3) (+ 1 2))
+    ;; (go (set-datum! my-field gimme-3))
     (define-syntax set-datum!
       (syntax-rules ()
         [(set-datum! field val) 
-         (begin
-           (define-coroutine
-             (set-handler)
-             (let ([obj (get-object key)])
-               (if (eqv? obj #f)
-                   #f
-                   (set-field! field (get-object key) val))))
-           set-handler)]
+         (if (not (deleted?))
+             (let ()
+               (define-coroutine
+                 (set-handler)
+                 (let ([obj (get-dp-data-object key)])
+                   (if (eqv? obj #f)
+                       #f
+                       (with-handlers 
+                         ([exn:fail?
+                            (let ()
+                              (semaphore-wait (get-dp-data-objects-sem))
+                              (let ([obj (get-dp-data-object key)])
+                                ;Protect against trying to set a deleted object
+                                (when (not obj #f)
+                                  (set-field! 
+                                    field 
+                                    (get-dp-data-object key) 
+                                    val)))
+                              (semaphore-post (get-dp-data-objects-sem)))])
+                         (display 
+                           "set-field failed with obj-key:~a; field: ~a; val: 
+                           ~a" 
+                           key 
+                           field 
+                           val)))))
+               (go set-handler))
+             'deleted)]
         [(set-datum! key field val)
-         (begin
-           (define-coroutine
-             (set-handler)
-             (let ([obj (get-object key)])
-               (if (eqv? obj #f)
-                   #f
-                   (set-field! field (get-object key) val))))
-           set-handler)]))))
-
+         (if (not (deleted?))
+             (let ()
+               (define-coroutine
+                 (set-handler)
+                 (let ([obj (get-dp-data-object key)])
+                   (if (eqv? obj #f)
+                       #f 
+                       (with-handlers 
+                         ([exn:fail?
+                            (let ()
+                              (semaphore-wait (get-dp-data-objects-sem))
+                              (let ([obj (get-dp-data-object key)])
+                                ;Protect against trying to set a deleted object
+                                (when (not obj #f)
+                                  (set-field! 
+                                    field 
+                                    (get-dp-data-object key) 
+                                    val)))
+                              (semaphore-post (get-dp-data-objects-sem)))])
+                         (display 
+                           "set-field failed with obj-key:~a; field: ~a; val: 
+                           ~a" 
+                           key 
+                           field 
+                           val)))))
+               (go set-handler))
+             'deleted)]))))
 
 
 ;; Create and register a new data object with the datapool. Do not (emit), 
@@ -580,8 +645,46 @@
                                  (class data%
                                         (super-new)
                                         (init-rest)
-                                        (define (run)
-                                          body
-                                          ...)
+                                        (define/public (run)
+                                                       body
+                                                       ...)
                                         (get-datum key))])
-                           (new (name% [key new-key] . params))))))
+                           (make-object name% key . params))))) 
+
+
+;; Data object destructor. Sets object to the 'deleted state, removes object 
+;; (receive) callbacks, removes the object from the object hash, and enqueues 
+;; the now free object key onto a free floating key queue
+(define (delete-data key) 
+  (let ([obj (get-dp-data-object key)])
+    (when (not (eqv? obj #f))
+      (let ()
+        ;Inform the data object it is deleted. This should stop it from 
+        ;executing further (receive), (send msg), 
+        (send obj delete)
+
+        (define (remove-obj-callbacks hkey value) 
+          ;Each h is a list of pairs in the form '(dst-obj-key dst-obj-callback)
+          (for ([h (length value)])
+               ;Return a list without handler pairs whose dst-obj-key 
+               ;matches key
+               (filter (not (eqv? (car h) key)))))
+
+        ;Remove all callbacks to the data object mapped to key
+        (semaphore-wait (get-dp-message-handlers-sem))
+        (hash-for-each 
+          (get-dp-message-handlers) 
+          remove-obj-callbacks)
+        (semaphore-post (get-dp-message-handlers-sem))
+
+        ;Remove the data object from the hash
+        (delete-dp-data-object key)
+        (add-free-dp-data-key key))))) 
+
+
+
+;;;---------------------------------------------------------------------------- 
+;; Run unit tests
+;;;---------------------------------------------------------------------------- 
+(define (run-unit-tests)
+  (load "3-ut.rkt"))
