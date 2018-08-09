@@ -5,19 +5,20 @@
          data/queue
          delay-pure) 
 
-(provide datapool ;start a datapool with given environment data and form to execute
+(provide datapool ;start a datapool with given env data and form to execute
          make-datapool-data ;make datapool environment data
          close-dp ;kill all threads in the datapool
-         channel ;create a channel object
+         channel ;create an asynchronous channel
          <- ;get form from a channel
          -> ;send form into a channel
-         get-datapool-channel ;get the channel to send messages into the datapool
+         get-datapool-channel ;get the channel to send messages into the dp
          send-to-datapool-parent ;send data to the datapool's parent scope
          data ;create data object and register it in the datapool
-         message ;create a message object with a given type and arguments
+         message% ;create a message object with a given type and arguments
+         go ;place a coroutine in a queue to be executed by a thread
          definep ;define a pure & stateless function
-         func ;define a pure & stateless coroutine
-         danger-func! ;define a coroutine
+         func ;define a pure & stateless coroutine; use in (go)
+         danger-func! ;define a coroutine with no state checks
          test-true?
          test-equal?
          test-fail
@@ -40,27 +41,27 @@
 ;; Return #t if the quoted form returns #t, else #f 
 (define (test-true? form)
   (if (eqv? form #t)
-    (begin
-      (printf "pass: ~a == #t" form)
-      #t)
-    (begin
-      (printf "FAIL: ~a == #f" form)
-      (when (defined? *run-3-tests-wait-before-cont*)
-        (read-line (current-input-port) 'any))
-      #f)))
+      (begin
+        (printf "pass: ~a == #t" form)
+        #t)
+      (begin
+        (printf "FAIL: ~a == #f" form)
+        (when (defined? *run-3-tests-wait-before-cont*)
+          (read-line (current-input-port) 'any))
+        #f)))
 
 
 ;; Return #t if quoted forms return an equal value, else #f
 (define (test-equal? form-a form-b)
   (if (eqv? form-a form-b)
-    (begin
-      (printf "pass: ~a == ~a" form-a form-b)
-      #t)
-    (begin
-      (printf "FAIL: ~a == ~a" form-a form-b)
-      (when (defined? *run-3-tests-wait-before-cont*)
-        (read-line (current-input-port) 'any))
-      #f))) 
+      (begin
+        (printf "pass: ~a == ~a" form-a form-b)
+        #t)
+      (begin
+        (printf "FAIL: ~a == ~a" form-a form-b)
+        (when (defined? *run-3-tests-wait-before-cont*)
+          (read-line (current-input-port) 'any))
+        #f))) 
 
 
 ;; Custom test fail
@@ -101,8 +102,8 @@
     (call/cc (lambda (return)
                (set! last-return return)
                (if (null? args)
-                 (last-continuation last-value)
-                 (apply last-continuation args))))))
+                   (last-continuation last-value)
+                   (apply last-continuation args))))))
 
 
 (define-syntax (define-coroutine stx)
@@ -131,18 +132,18 @@
 ;; guaranteed to be stateless 
 (define-syntax-rule (func (name . params) body ...)
                     (eval (if (pure/stateless (define (name . params) body ...))
-                            '(define-coroutine (name . params)
-                                                    (begin
-                                                      (yield 'alive) 
-                                                      body
-                                                      ...
-                                                      #f))
-                            (begin
-                              (raise 
-                                (make-exn:fail:user
-                                  '("Function is not pure: " 
-                                    (define (name . params) body ...))))
-                              '())) eval-namespace))
+                              '(define-coroutine (name . params)
+                                                 (begin
+                                                   (yield 'alive) 
+                                                   body
+                                                   ...
+                                                   #f))
+                              (begin
+                                (raise 
+                                  (make-exn:fail:user
+                                    '("Function is not pure: " 
+                                      (define (name . params) body ...))))
+                                '())) eval-namespace))
 
 
 ;; DO *NOT* USE UNLESS REQUIRED FOR PERFORMANCE REASONS
@@ -171,8 +172,8 @@
 ;;channel get, blocks by default
 (define (<- ch [block #t])
   (if block
-    (async-channel-get ch)
-    (async-channel-try-get ch)))
+      (async-channel-get ch)
+      (async-channel-try-get ch)))
 
 
 ;;channel put
@@ -199,7 +200,7 @@
 ;;;--------------------------------------------------------------------------
 ;;create datapool data 
 (define (make-datapool-data num-threads) 
-  (box 
+  (box ;by reference
     (vector 
       ;thread id's, queues, and semaphores
       (make-vector 
@@ -314,16 +315,16 @@
 ;; Hash new data object
 (define (hash-dp-data-object key obj)
   (if (not (get-dp-data-object key) #f)
-    #f ;we've run out of possible hash table values and looped?
-    (begin
-      (semaphore-wait (get-dp-data-objects-sem))
-      (hash (get-dp-data-objects) key obj)
-      (semaphore-post (get-dp-data-objects-sem))
-      (define-coroutine 
-        (run-handler)
-        (send (get-dp-data-object key) run))
-      (go '(run-handler))
-      #t)))
+      #f ;we've run out of possible hash table values and looped?
+      (let ()
+        (semaphore-wait (get-dp-data-objects-sem))
+        (hash (get-dp-data-objects) key obj)
+        (semaphore-post (get-dp-data-objects-sem))
+        (define-coroutine 
+          (run-handler)
+          (send (get-dp-data-object key) run))
+        (go run-handler)
+        #t)))
 
 
 ;; Get a data object from the hash
@@ -376,11 +377,11 @@
 (define (get-task-q-idx thread-idx)
   (let ([thread-queue (get-dp-queue thread-idx)])
     (if (eqv? (queue-length thread-queue) 0)
-      (let ([highest-idx (get-max-dp-q-idx)])
-        (if (eqv? (queue-length (get-dp-queue highest-idx)) 0) 
-          (thread-suspend (current-thread))
-          (highest-idx)))
-      (thread-idx))))
+        (let ([highest-idx (get-max-dp-q-idx)])
+          (if (eqv? (queue-length (get-dp-queue highest-idx)) 0) 
+              (thread-suspend (current-thread))
+              (highest-idx)))
+        (thread-idx))))
 
 
 ;; Return a task from a thread queue to execute
@@ -399,12 +400,12 @@
 (define (dp-thread-eval-task thread-idx task evals-left)
   (let ([ret (task)])
     (if (eqv? ret 'alive)
-      (if (> evals-left 0)
-        (dp-thread-eval-task thread-idx (- evals-left 1))
-        (begin 
-          (go task) ; place task at the back of a queue
-          #f)) ; task not yet completed
-      #t))) ; task completed
+        (if (> evals-left 0)
+            (dp-thread-eval-task thread-idx (- evals-left 1))
+            (begin 
+              (go task) ; place task at the back of a queue
+              #f)) ; task not yet completed
+        #t))) ; task completed
 
 
 ;; Eternal thread tail recursion of executing tasks
@@ -437,19 +438,28 @@
 ;; as the argument for management functions like (close-dp).
 (define (datapool datapool-data dp-main)
   (let ([*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
-        [*datapool-environment-data* dp-data]
+        [*datapool-environment-data* datapool-data]
         [*data-obj-key-src* 0])
-    (if (> num-threads 0)
-      (begin 
-        (go dp-main) ;Execute the provided dp-main function
-        (get-dp-data))
-      #f)))
+    (if (> (get-num-dp-threads) 0)
+        (begin 
+          (go dp-main) ;Execute the provided dp-main function
+          (get-dp-data))
+        #f)))
 
 
 
 ;;;----------------------------------------------------------------------------
 ;;; classes & macros
 ;;;---------------------------------------------------------------------------- 
+;; message class 
+(define message%
+  (class object% 
+         (super-new)
+         (init-field
+           src
+           type
+           args)))
+
 ;; Data object interface
 (define data-interface (interface () 
                                   register-message-handler 
@@ -460,22 +470,13 @@
   (class* 
     object% 
     (data-interface)
-    (init
-      [key key])
+    (init-field key)
     (super-new)
 
 
     ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
     ;; Private Methods and Fields
     ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
-    ;; message subclass 
-    (define/private message%
-                    (class object%
-                           (init src
-                                 type
-                                 args)
-                           (super-new)))
-
     ;; Register a message callback
     (define/private 
       (register-message-handler msg-type callback-form)
@@ -485,20 +486,20 @@
                                       msg-type 
                                       #f)])
           (if (eqv? #f msg-handlers)
-            (set-dp-message-handlers 
-              (hash-set msg-handlers
-                        msg-type 
-                        '(callback-form)))
-            (set-dp-message-handlers 
-              (hash-set msg-handlers
-                        msg-type 
-                        (append msg-handlers '(callback-form))))))
+              (set-dp-message-handlers 
+                (hash-set msg-handlers
+                          msg-type 
+                          callback-form))
+              (set-dp-message-handlers 
+                (hash-set msg-handlers
+                          msg-type 
+                          (append msg-handlers '(callback-form))))))
         (semaphore-post (get-dp-message-handlers-sem))
         #t))
 
     ;; Send a message to connected handlers in the current datapool
     (define/private 
-      (emit msg)
+      (send msg)
       (let ([handlers (hash-ref 
                         (get-dp-message-handlers) 
                         (get-field type msg))])
@@ -513,28 +514,28 @@
     ;; Public Methods and Fields
     ;;,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
     (define/public (message inp-type inp-args)
-                   (new (message% [src key] [type inp-type] [args inp-args])))
+                   (make-object message% key inp-type inp-args))
 
     ;; Qt-esque connect macro
     (define-syntax connect-message
       (syntax-rules ()
-                    [(register src-obj-key msg-type dst-obj-key handler)
-                     (register-message-handler 
-                       msg-type
-                       (begin
-                         (define-coroutine
-                           (handler-accessor)
-                           (if (eqv? (get-dp-data-object dst-obj-key) #f)
-                             #f
-                             (send 
-                               (get-dp-data-object dst-obj-key) 
-                               handler 
-                               (get-field args msg)))
-                           handler-accessor)))]))
+        [(mailbox src-obj-key msg-type dst-obj-key handler)
+         (register-message-handler 
+           msg-type
+           (let ()
+             (define-coroutine
+               (handler-accessor)
+               (if (eqv? (get-dp-data-object dst-obj-key) #f)
+                   #f
+                   (send 
+                     (get-dp-data-object dst-obj-key) 
+                     handler 
+                     (get-field args msg))))
+             handler-accessor))]))
 
     ;; Return a field from the object
     (define/public (get-datum field)
-                   (get-field field self))
+                   (get-field field this))
 
     ;; Create task to asynchronously set an object's field. set-field! 
     ;; should be inherently threadsafe (just like normal set!). 
@@ -547,24 +548,24 @@
     ;;       (set-datum! my-field '(+ 1 2)))
     (define-syntax set-datum!
       (syntax-rules ()
-                    [(set-datum! field val) 
-                     (begin
-                       (define-coroutine
-                         (set-handler)
-                         (let ([obj (get-object key)])
-                           (if (eqv? obj #f)
-                             #f
-                             (set-field! field (get-object key) val))))
-                       set-handler)]
-                    [(set-datum! key field val)
-                     (begin
-                       (define-coroutine
-                         (set-handler)
-                         (let ([obj (get-object key)])
-                           (if (eqv? obj #f)
-                             #f
-                             (set-field! field (get-object key) val))))
-                       set-handler)]))))
+        [(set-datum! field val) 
+         (begin
+           (define-coroutine
+             (set-handler)
+             (let ([obj (get-object key)])
+               (if (eqv? obj #f)
+                   #f
+                   (set-field! field (get-object key) val))))
+           set-handler)]
+        [(set-datum! key field val)
+         (begin
+           (define-coroutine
+             (set-handler)
+             (let ([obj (get-object key)])
+               (if (eqv? obj #f)
+                   #f
+                   (set-field! field (get-object key) val))))
+           set-handler)]))))
 
 
 
@@ -572,10 +573,10 @@
 ;; (connect), (set-datum!), or (go) in the object arguments or you may have a 
 ;; bad time.
 (define-syntax-rule 
-  (data (name . params) body ...)
-  (let ([key (gen-dp-data-obj-key)])
-    (hash-dp-data-object (gen-dp-data-obj-key)
-                         (let ([new-data%
+  (data (name% . params) body ...)
+  (let ([new-key (gen-dp-data-obj-key)])
+    (hash-dp-data-object new-key 
+                         (let ([name%
                                  (class data%
                                         (super-new)
                                         (init-rest)
@@ -583,4 +584,4 @@
                                           body
                                           ...)
                                         (get-datum key))])
-                           (new (new-data%) . params)))))
+                           (new (name% [key new-key] . params))))))
