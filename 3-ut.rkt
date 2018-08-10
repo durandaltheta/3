@@ -1,5 +1,4 @@
 #lang racket
-(require 3)
 
 ;;;---------------------------------------------------------------------------- 
 ;;; Function Tests
@@ -7,7 +6,7 @@
 ;;**************************************
 ;;TEST test-true? test-equal?
 (test-true? #t)
-(test-true? (not #t))
+(test-true? (not #f))
 (test-equal? 1 1)
 (test-equal? "test" "test")
 (test-equal? 'test 'test)
@@ -180,70 +179,152 @@
   (for ([i num-threads])
        (test-true? 
          (thread? 
-           (car (vector-ref (vector-ref (get-dp-data) 0) i)))))
+           (vector-ref (vector-ref (vector-ref (get-dp-data) 0) i) 0))))
 
   ;Verify the threads are alive
   (for ([i num-threads])
        (test-true? (not (thread-dead? 
-                          (car 
+                          (vector-ref
                             (vector-ref 
                               (vector-ref (get-dp-data) 0) 
-                              i))))))
+                              i) 0)))))
 
   ;Verify task queues exist
   (for ([i num-threads])
        (test-true? 
          (queue? 
-           (cdr (vector-ref (vector-ref (get-dp-data) 0) i)))))
+           (vector-ref (vector-ref (vector-ref (get-dp-data) 0) i) 1))))
 
   ;Verify task queue semaphores exist
   (for ([i num-threads])
        (test-true? 
          (semaphore? 
-           (cddr (vector-ref (vector-ref (get-dp-data) 0) i)))))
+           (vector-ref (vector-ref (vector-ref (get-dp-data) 0) i) 2))))
 
   ;Verify hash table of message handlers exists
   (test-true? 
     (hash? 
-      (car (vector-ref (get-dp-data) 1))))
+      (vector-ref (vector-ref (get-dp-data) 1) 0)))
 
   ;Verify hash table semaphore exists
   (test-true? 
     (semaphore? 
-      (cdr (vector-ref (get-dp-data) 1))))
+      (vector-ref (vector-ref (get-dp-data) 1) 1)))
 
   ;Verify parent->dp channel exists
   (test-true? 
     (async-channel? 
-      (car (vector-ref (get-dp-data) 2))))
+      (vector-ref (vector-ref (get-dp-data) 2) 0)))
 
   ;Verify dp->parent channel exists
   (test-true? 
     (async-channel? 
-      (cdr (vector-ref (get-dp-data) 2))))
+      (vector-ref (vector-ref (get-dp-data) 2) 1)))
 
   ;Verify we can kill the datapool environment
   (close-dp *datapool-environment-data*)
 
   (for ([i num-threads])
        (test-true? (thread-dead? 
-                     (car 
+                     (vector-ref 
                        (vector-ref 
-                         (vector-ref (get-dp-data) 0) 
-                         i))))))
+                         (vector-ref (get-dp-data) 0) i) 0)))))
 ;;**************************************
 
 
 ;;**************************************
-;;TEST get-dp-channel
+;;TEST get-dp-channel get-num-dp-threads get-dp-thread get-dp-queue 
+;;TEST get-dp-queue-sem get-dp-data-objects get-dp-data-objects-sem 
+;;TEST get-dp-data-objects get-dp-data-objects-sem gen-dp-data-obj-key
 (let ([num-threads 2]
-      [*datapool-environment-data* (make-dp-data num-threads)])
+      [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
+      [*datapool-environment-data* (make-dp-data num-threads)]
+      [*data-obj-key-src* 0])
 
   ;Check that parent->dp channel exists
   (test-true? (async-channel? (get-dp-channel *datapool-environment-data*)))
+
+  ;Check correct num of threads exist 
+  (test-equal? (get-num-dp-threads) 2)
+  
+  ;Check threads exist 
+  (test-true? (thread? (get-dp-thread 0)))
+  (test-true? (thread? (get-dp-thread 1)))
+
+  ;Check thread task queues exist
+  (test-true? (queue? (get-dp-queue 0)))
+  (test-true? (queue? (get-dp-queue 1)))
+
+  ;Check thread task queues semaphores exist
+  (test-true? (semaphore? (get-dp-queue-sem 0)))
+  (test-true? (semaphore? (get-dp-queue-sem 1)))
+
+  ;Check data object hash exists
+  (test-true? (hash? (get-dp-data-objects)))
+  (test-true? (semaphore? (get-dp-data-objects-sem)))
+
+  ;Check key generation Function
+  (test-equal? (gen-dp-data-obj-key) 0)
+  (test-equal? (gen-dp-data-obj-key) 1)
+  (test-equal? (gen-dp-data-obj-key) 2)
+  (test-equal? (gen-dp-data-obj-key) 3)
   (close-dp *datapool-environment-data*))
 ;;**************************************
 
+;;**************************************
+;;TEST get-min-dp-q-idx get-max-dp-q-idx go
+(let ([num-threads 2]
+      [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
+      [*datapool-environment-data* (make-dp-data num-threads)]
+      [*data-obj-key-src* 0])
+
+  ;;Arbitrary function to execute
+  (define (test-task) #t)
+
+  ;;Test defaults
+  ;q0-size: 0, q1-size: 0
+  (test-equal? (get-min-dp-q-idx) 0)
+  (test-equal? (get-max-dp-q-idx) 0)
+  (test-equal? (queue-length (get-dp-queue 0)) 0)
+  (test-equal? (queue-length (get-dp-queue 1)) 0)
+
+  (enqueue! (get-dp-queue 0) test-task)
+
+  ;q0-size: 1, q1-size: 0
+  (test-equal? (get-min-dp-q-idx) 1)
+  (test-equal? (get-max-dp-q-idx) 0)
+  (test-equal? (queue-length (get-dp-queue 0)) 1)
+  (test-equal? (queue-length (get-dp-queue 1)) 0)
+
+  (enqueue! (get-dp-queue 1) test-task)
+  
+  ;q0-size: 1, q1-size: 1
+  (test-equal? (get-min-dp-q-idx) 0)
+  (test-equal? (get-max-dp-q-idx) 0)
+  (test-equal? (queue-length (get-dp-queue 0)) 1)
+  (test-equal? (queue-length (get-dp-queue 1)) 1)
+
+  (enqueue! (get-dp-queue 1) test-task)
+
+  ;q0-size: 1, q1-size: 2
+  (test-equal? (get-min-dp-q-idx) 0)
+  (test-equal? (get-max-dp-q-idx) 1)
+  (test-equal? (queue-length (get-dp-queue 0)) 1)
+  (test-equal? (queue-length (get-dp-queue 1)) 2)
+
+  ;resume thread execution
+  (go test-task) 
+  (sleep 1)
+
+  ;threads should be completed and asleep again
+  ;q0-size: 0, q1-size: 0
+  (test-equal? (get-min-dp-q-idx) 0)
+  (test-equal? (get-max-dp-q-idx) 0)
+  (test-equal? (queue-length (get-dp-queue 0)) 0)
+  (test-equal? (queue-length (get-dp-queue 1)) 0)
+
+  (close-dp *datapool-environment-data*))
+;;**************************************
 
 
 ;;;---------------------------------------------------------------------------- 
@@ -253,3 +334,9 @@
 ;(define dp1 (datapool 4 '(main argv argc)))
 ;(let ([ch (get-dp-channel dp1)]) 
 ;(<- ch))
+
+
+;;;---------------------------------------------------------------------------- 
+;;; Closing Analysis
+;;;---------------------------------------------------------------------------- 
+(exit)

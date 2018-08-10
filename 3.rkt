@@ -197,6 +197,8 @@
 (define *data-obj-key-src* 0)
 (define *data-obj-free-key-q* #f)
 
+
+
 ;;;--------------------------------------------------------------------------
 ;;; Public Datapool Functions
 ;;;--------------------------------------------------------------------------
@@ -413,11 +415,11 @@
 ;; Evaluate given task, guarantees that any one task will not starve the 
 ;; waiting tasks for cpu time by limiting continuous evaluations
 ;; Returns: #t if task completed, #f if task not yet completed
-(define (dp-thread-eval-task thread-idx task evals-left)
+(define (dp-thread-exec-task thread-idx task evals-left)
   (let ([ret (task)])
     (if (eqv? ret 'alive)
         (if (> evals-left 0)
-            (dp-thread-eval-task thread-idx (- evals-left 1))
+            (dp-thread-exec-task thread-idx (- evals-left 1))
             (begin 
               (go task) ; place task at the back of a queue
               #f)) ; task not yet completed
@@ -427,7 +429,7 @@
 ;; Eternal thread tail recursion of executing tasks
 (define (dp-thread thread-idx) 
   ;execute the task we get 
-  (dp-thread-eval-task 
+  (dp-thread-exec-task 
     thread-idx 
     (get-task thread-idx) 
     *dp-thread-continuous-eval-limit*)
@@ -477,10 +479,12 @@
            type
            args)))
 
+
 ;; Data object interface
 (define data-interface (interface () 
                                   register-message-handler 
                                   send-message))
+
 
 ;; Data object class
 (define data%
@@ -597,7 +601,7 @@
                                     val)))
                               (semaphore-post (get-dp-data-objects-sem)))])
                          (display 
-                           "set-field failed with obj-key:~a; field: ~a; val: 
+                           "set-field failed with obj-key: ~a; field: ~a; val: 
                            ~a" 
                            key 
                            field 
@@ -625,7 +629,7 @@
                                     val)))
                               (semaphore-post (get-dp-data-objects-sem)))])
                          (display 
-                           "set-field failed with obj-key:~a; field: ~a; val: 
+                           "set-field failed with obj-key: ~a; field: ~a; val: 
                            ~a" 
                            key 
                            field 
