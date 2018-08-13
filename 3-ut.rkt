@@ -4,19 +4,25 @@
 ;;; Function Tests
 ;;;---------------------------------------------------------------------------- 
 ;;**************************************
-;;TEST test-true? test-equal?
+;;TEST test-true? 
+;;     test-equal?
+;;     test-pass
+;;     test-fail
+;;--------------------------------------
 (test-true? #t)
 (test-true? (not #f))
 (test-equal? 1 1)
 (test-equal? "test" "test")
 (test-equal? 'test 'test)
 (test-equal? '("test" "test2") '("test" "test2"))
+(test-pass "pass text")
+(test-fail "fail text")
 ;;**************************************
 
 
 ;;**************************************
 ;;TEST define-coroutine 
-;; Run tests for co-routines
+;;--------------------------------------
 (define-coroutine
   (co-test1) 
   (yield 1)
@@ -49,7 +55,7 @@
 
 ;;**************************************
 ;;TEST func
-;; Tests for (func) definitions
+;;--------------------------------------
 (func
   (co-test1) 
   (yield 1)
@@ -90,7 +96,7 @@
 
 ;;**************************************
 ;;TEST danger-func!
-;; Tests for (danger-func!) definitions
+;;--------------------------------------
 (danger-func!
   (co-test1) 
   (yield 1)
@@ -133,6 +139,7 @@
 
 ;;**************************************
 ;;TEST channel
+;;--------------------------------------
 (let ([ch (channel)])
   (test-true? (async-channel? ch)))
 ;;**************************************
@@ -140,6 +147,7 @@
 
 ;;**************************************
 ;;TEST <-
+;;--------------------------------------
 (let ([ch (channel)])
   (async-channel-put ch "teststring")
   (let ([ret (<- ch #f)])
@@ -154,6 +162,7 @@
 
 ;;**************************************
 ;;TEST ->
+;;--------------------------------------
 (let ([ch (channel)])
   (-> ch "teststring")
   (let ([ret (<- ch #f)])
@@ -167,7 +176,10 @@
 
 
 ;;**************************************
-;;TEST make-dp-data get-dp-data close-dp
+;;TEST make-dp-data 
+;;     get-dp-data 
+;;     close-dp
+;;--------------------------------------
 ;Sanity test
 (test-equal? (get-dp-data) #f)
 
@@ -233,9 +245,17 @@
 
 
 ;;**************************************
-;;TEST get-dp-channel get-num-dp-threads get-dp-thread get-dp-queue 
-;;TEST get-dp-queue-sem get-dp-data-objects get-dp-data-objects-sem 
-;;TEST get-dp-data-objects get-dp-data-objects-sem gen-dp-data-obj-key
+;;TEST get-dp-channel 
+;;     get-num-dp-threads 
+;;     get-dp-thread 
+;;     get-dp-queue 
+;;     get-dp-queue-sem 
+;;     get-dp-data-objects 
+;;     get-dp-data-objects-sem 
+;;     get-dp-data-objects 
+;;     get-dp-data-objects-sem 
+;;     gen-dp-data-obj-key
+;;--------------------------------------
 (let ([num-threads 2]
       [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
       [*datapool-environment-data* (make-dp-data num-threads)]
@@ -272,7 +292,10 @@
 ;;**************************************
 
 ;;**************************************
-;;TEST get-min-dp-q-idx get-max-dp-q-idx go
+;;TEST get-min-dp-q-idx 
+;;     get-max-dp-q-idx 
+;;     go
+;;--------------------------------------
 (let ([num-threads 2]
       [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
       [*datapool-environment-data* (make-dp-data num-threads)]
@@ -327,6 +350,224 @@
 ;;**************************************
 
 
+;;**************************************
+;;TEST hash-dp-data-object
+;;     get-dp-data-object
+;;     delete-dp-data-object
+;;--------------------------------------
+(let ([num-threads 2]
+      [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
+      [*datapool-environment-data* (make-dp-data num-threads)]
+      [*data-obj-key-src* 0])
+
+  (define test-class%
+    (class object% (super-new)
+           (define/public (get-3)
+                          3)))
+
+  (define test-object (make-object test-class%))
+
+  (test-equal? (hash-count (get-dp-data-objects)) 0)
+  (test-true? (hash-dp-data-object 0 test-object))
+  (test-true? (not (hash-dp-data-object 0 test-object)))
+
+  (test-equal? (send (get-dp-data-object 0) get-3) 3)
+  (test-true? (not (get-dp-data-object 1)))
+
+  (test-true? (delete-dp-data-object 0))
+  (test-true? (not (get-dp-data-object 0))))
+;;**************************************
+
+
+;;**************************************
+;;TEST get-dp-message-handlers
+;;     get-dp-message-handlers-sem
+;;     set-dp-message-handlers
+;;--------------------------------------
+(let ([num-threads 2]
+      [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
+      [*datapool-environment-data* (make-dp-data num-threads)]
+      [*data-obj-key-src* 0])
+  (test-true? (hash? (get-dp-message-handlers)))
+  (test-true? (semaphore? (get-dp-message-handlers-sem)))
+
+  (define test-type 'test-type)
+  (define (callback-form) 3)
+  ;Probably should rework this funcion to be simpler. However, it's not exposed
+  ;by the module and should only be used internally so it's probably fine for
+  ;now
+  (set-dp-message-handlers
+    (hash-set (get-dp-message-handlers)
+              test-type
+              '(callback-form)))
+
+  (test-equal? (hash-ref (get-dp-message-handlers) test-type) '(callback-form))
+
+  (define (callback-form-2) 2)
+  (let ([cur-handlers (hash-ref (get-dp-message-handlers) test-type)])
+    (set-dp-message-handlers
+      (hash-set (get-dp-message-handlers)
+                test-type
+                (append cur-handlers '(callback-form-2)))))
+
+  (test-equal? (hash-ref (get-dp-message-handlers) test-type) 
+               '(callback-form callback-form-2)))
+;;**************************************
+
+;;**************************************
+;;TEST get-dp-parent-channel
+;;     get-dp-parent-ch-sem
+;;     send-to-datapool-parent
+;;     go-dp
+;;--------------------------------------
+(let ([num-threads 2]
+      [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
+      [*datapool-environment-data* (make-dp-data num-threads)]
+      [test-dp-data *datapool-environment-data*]
+      [*data-obj-key-src* 0])
+  (test-equal? (channel? (get-dp-parent-channel)))
+  (test-equal? (semaphore? (get-dp-parent-channel-sem)))
+
+  (-> (get-dp-parent-channel) #t)
+  (test-true? (<- (get-dp-parent-channel)))
+
+  (-> (get-dp-parent-channel) "test-string")
+  (test-equal? (<- (get-dp-parent-channel)) "test-string")
+
+  (send-to-datapool-parent #t)
+  (test-true? (<- (get-dp-parent-channel)))
+
+  (send-to-datapool-parent "test-string2")
+  (test-equal? (<- (get-dp-parent-channel)) "test-string2")
+
+  (let ([ch (channel)])
+    (func (test-func)
+          (-> ch 'complete))
+    (go-dp test-dp-data test-func)
+    (sleep 1)
+    (test-equal? (<- ch) 'complete)))
+
+;;**************************************
+
+;;**************************************
+;;TEST get-task-q-idx
+;;     get-task
+;;     dp-thread-exec-task
+;;     dp-thread
+;;     dp-thread-start
+;;--------------------------------------
+(let ([num-threads 2]
+      [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
+      [*datapool-environment-data* (make-dp-data num-threads)]
+      [*data-obj-key-src* 0])
+  (test-equal? (get-task-q-idx 0) 0)
+  (test-equal? (get-task-q-idx 1) 1)
+
+  (define (test-task) #t)
+  (enqueue! (get-dp-queue 1) test-task)
+
+  (test-equal? (get-task-q-idx 0) 1)
+  (test-equal? (get-task-q-idx 1) 1)
+
+  (enqueue! (get-dp-queue 0) test-task)
+
+  (test-equal? (get-task-q-idx 0) 0)
+  (test-equal? (get-task-q-idx 1) 1)
+
+  (enqueue! (get-dp-queue 0) test-task)
+
+  (test-equal? (get-task-q-idx 0) 0)
+  (test-equal? (get-task-q-idx 1) 0)
+
+  (let ([len-0 (queue-length (get-dp-queue 0))]
+        [task (get-task 0)])
+    (test-true? (> (queue-length (get-dp-queue 0))))
+    (test-true? (> len-0 (queue-length (get-dp-queue))))
+
+    (test-true? (dp-thread-exec-task 0 task 10))
+
+    ;func coroutine that evaluates infinitely
+    (func 
+      (eval-infinity) 
+      (eval-infinity))
+
+    ;Should evaluate 10 times then return #f
+    (test-true? (not (dp-thread-exec-task 0 eval-infinity 10))))
+
+  ;Don't need to sleep as the current thread is actually running this func
+  (dp-thread 1)
+  (test-true? (not (thread-dead? (get-dp-thread 1))))
+  (test-true? (not (thread-running? (get-dp-thread 1))))
+  (test-true? (thread-running? (current-thread)))
+  (test-equal? (queue-length (get-dp-queue 0) 0))
+  (test-equal? (queue-length (get-dp-queue 1) 0))
+
+  (enqueue! (get-dp-queue 1) test-task)
+  (enqueue! (get-dp-queue 1) test-task)
+
+  (test-equal? (queue-length (get-dp-queue 1) 2))
+
+  ;Don't need to sleep as the current thread is actually running this func
+  (dp-thread-start)
+  (test-equal? (queue-length (get-dp-queue 0) 0))
+  (test-equal? (queue-length (get-dp-queue 1) 0)))
+;;**************************************
+
+;;**************************************
+;;TEST datapool
+;;--------------------------------------
+(let ()
+  (func (main) 
+    (let ([parent (get-dp-parent-channel)])
+      (-> parent "test string")))
+
+  (define dp (datapool 2 main))
+  (sleep 1)
+
+  (test-equal? (<- (get-datapool-channel dp)) "test string")
+  (close-dp dp))
+;;**************************************
+
+;;**************************************
+;;TEST message%
+;;--------------------------------------
+;(let ([num-threads 2]
+;      [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
+;      [*datapool-environment-data* (make-dp-data num-threads)]
+;      [*data-obj-key-src* 0])
+;  )
+;;**************************************
+
+;;**************************************
+;;TEST data%
+;;     register-message-handler
+;;     send
+;;     deleted?
+;;     delete
+;;     message
+;;     receive
+;;     set-datum
+;;--------------------------------------
+;(let ([num-threads 2]
+;      [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
+;      [*datapool-environment-data* (make-dp-data num-threads)]
+;      [*data-obj-key-src* 0])
+;  )
+;;**************************************
+
+;;**************************************
+;;TEST data
+;;     delete-data
+;;--------------------------------------
+;(let ([num-threads 2]
+;      [*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
+;      [*datapool-environment-data* (make-dp-data num-threads)]
+;      [*data-obj-key-src* 0])
+;  )
+;;**************************************
+
+
+
 ;;;---------------------------------------------------------------------------- 
 ;;; Feature Tests
 ;;;---------------------------------------------------------------------------- 
@@ -339,4 +580,4 @@
 ;;;---------------------------------------------------------------------------- 
 ;;; Closing Analysis
 ;;;---------------------------------------------------------------------------- 
-(exit)
+;(exit)
