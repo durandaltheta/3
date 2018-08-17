@@ -26,7 +26,7 @@
          run-unit-tests)
 
 ;;;----------------------------------------------------------------------------
-;;; Test coroutinetions 
+;;; Test functions 
 ;;;---------------------------------------------------------------------------- 
 ;; To wait for user input on test failure 
 ;; (define *run-3-tests-wait-before-cont* #t) 
@@ -238,7 +238,7 @@
 
 
 ;;;----------------------------------------------------------------------------
-;;;basic channel coroutinetions
+;;;basic channel functions
 ;;;---------------------------------------------------------------------------- 
 ;;create an async channel, no size limit by default
 (define (channel [size #f]) (make-async-channel size))
@@ -266,7 +266,7 @@
 
 
 ;;;--------------------------------------------------------------------------
-;;; Datapool Data coroutinetions
+;;; Datapool Data functions
 ;;;--------------------------------------------------------------------------
 ;;create datapool data 
 (define (make-dp-data num-threads eval-limit) 
@@ -574,7 +574,7 @@
 ;;;---------------------------------------------------------------------------- 
 ;; Create a datapool environment. Setup worker threads and begin execution of 
 ;; the user defined main form. Returns datapool environment data vector needed
-;; as the argument for management coroutinetions like (close-dp). To kick off 
+;; as the argument for management functions like (close-dp). To kick off 
 ;; datapool execution evaluate a (go env form). Form can be any arbitrary form,
 ;; *or* it can be a data object registered with the environment via the (data) 
 ;; macro below
