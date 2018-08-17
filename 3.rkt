@@ -16,9 +16,9 @@
          get-dp-data-object ;get an object via its key
          message% ;create a message object with a given type and arguments
          go ;place a coroutine in a queue to be executed by a thread
-         definep ;define a pure & stateless function
-         func ;return a coroutine thunk for use in (go)
-         ;danger-func! ;define a coroutine with no state checks
+         definep ;define a pure & stateless coroutinetion
+         coroutine ;return a coroutine thunk for use in (go)
+         ;danger-coroutine! ;define a coroutine with no state checks
          test-true?
          test-equal?
          test-fail
@@ -26,7 +26,7 @@
          run-unit-tests)
 
 ;;;----------------------------------------------------------------------------
-;;; Test Functions 
+;;; Test coroutinetions 
 ;;;---------------------------------------------------------------------------- 
 ;; To wait for user input on test failure 
 ;; (define *run-3-tests-wait-before-cont* #t) 
@@ -43,12 +43,16 @@
 (define (test-true? description form [wait #f])
   (if (eqv? form #t)
       (let ()
-        (printf "pass ~a: ~a == #t\n\n" description form)
+        (printf "pass ~a: #t\n\n" description)
         #t)
       (let ()
-        (printf "FAIL ~a: ~a != #f\n\n" description form)
-        (when wait
-          (read-line (current-input-port) 'any))
+        (printf "FAIL ~a: ~a != #t\n" description form)
+        (if wait
+            (let ()
+              (printf "<enter to continue>")
+              (read-line (current-input-port) 'any)
+              (printf "\n"))
+            (printf "\n"))
         #f)))
 
 
@@ -59,9 +63,13 @@
         (printf "pass ~a: ~a == ~a\n\n" description form-a form-b)
         #t)
       (let ()
-        (printf "FAIL ~a: ~a != ~a\n\n" description form-a form-b)
-        (when wait
-          (read-line (current-input-port) 'any))
+        (printf "FAIL ~a: ~a != ~a\n" description form-a form-b)
+        (if wait
+            (let ()
+              (printf "<enter to continue>")
+              (read-line (current-input-port) 'any)
+              (printf "\n"))
+            (printf "\n"))
         #f))) 
 
 
@@ -84,30 +92,37 @@
 ;; Forward define for yield 
 (define (yield val) val)
 
-
 ;; Coroutine definition  
 (define (make-generator procedure)
   (define last-return values)
   (define last-value #f)
+  (define status 'suspended)
   (define (last-continuation _) 
-    (let ((result (procedure yield))) 
+    (let ([result (procedure yield)]) 
       (last-return result)))
 
   (define (yield value)
     (call/cc (lambda (continuation)
                (set! last-continuation continuation)
                (set! last-value value)
+               (set! status 'suspended)
                (last-return value))))
 
   (lambda args
     (call/cc (lambda (return)
                (set! last-return return)
-               (if (null? args)
-                   (last-continuation last-value)
-                   (apply last-continuation args))))))
+               (cond ((null? args) 
+                      (let ()
+                        (set! status 'dead)
+                        (last-continuation last-value)))
+                     ((eq? (car args) 'status?) status)
+                     ((eq? (car args) 'dead?) (eq? status 'dead))
+                     ((eq? (car args) 'alive?) (not (eq? status 'dead)))
+                     ((eq? (car args) 'kill!) (set! status 'dead))
+                     (#t (apply last-continuation args)))))))
 
 
-(define-syntax (define-coroutine stx)
+(define-syntax (coroutine stx)
   (syntax-case stx ()
                ((_ (name . args) . body )
                 #`(define (name . args)
@@ -116,63 +131,57 @@
                         . body))))))
 
 
-
 ;; Define a namespace so eval can run correctly
 (define-namespace-anchor eval-anchor)
 (define eval-namespace (namespace-anchor->namespace eval-anchor))
 
 
-;; Define a pure & stateless function
+;; Define a pure & stateless coroutinetion
 (define-syntax-rule (definep (name . params) body ...)
                     (define-pure/stateless (name . params) body ...))
 
 
+;;TODO: Not sure what to do about not being able to use 
+;;delay/pure as expected in untyped racket
 ;; Define a coroutine of a pure stateless coroutine. These should always 
 ;; be safe when executed asynchronously with a (go) call. The current 
 ;; 'coroutine' portion of the definition *is* stateful, only the provided form 
 ;; is guaranteed to be stateless 
 #|
-(define-syntax-rule (func (name . params) body ...)
+(define-syntax-rule (coroutine (name . params) body ...)
                     (eval (let ()
-                            ;Special check to see if given function symbols 
-                            ;produce a pure & stateless function. Otherwise
+                            ;Special check to see if given coroutinetion symbols 
+                            ;produce a pure & stateless coroutinetion. Otherwise
                             ;should raie an error!
                             (let ([def (definep (name . params)
                                                 body
                                                 ...)])
                               (void))
-                            '(define-coroutine (name . params)
-                                             (begin
-                                               (yield 'alive) 
-                                               body
-                                               ...))) 
+                            '(coroutine (name . params)
+                                        (begin
+                                          (yield 'alive) 
+                                          body
+                                          ...))) 
                           eval-namespace))
 
 
 ;; DO *NOT* USE UNLESS REQUIRED FOR PERFORMANCE REASONS
-;; Define a coroutine with no purity/state checks. (func) can be slow because 
+;; Define a coroutine with no purity/state checks. (coroutine) can be slow because 
 ;; it fully expands the form checking for purity/statelessness. This rule skips
 ;; that check, which makes it *dangerous* when used in the multithreaded (go)
-;; environment. Therefore, even if you use this function you should still 
+;; environment. Therefore, even if you use this coroutinetion you should still 
 ;; validate its purity, manually if necessary.
-(define-syntax-rule (danger-func! (name . params) body ...)
-                    (define-coroutine (name . params)
-                                    (begin
-                                      (yield 'alive) 
-                                      body
-                                      ...)))
+(define-syntax-rule (danger-coroutine! (name . params) body ...)
+                    (coroutine (name . params)
+                               (begin
+                                 (yield 'alive) 
+                                 body
+                                 ...)))
 |#
-
-(define-syntax (func stx)
-  (syntax-case stx ()
-               ((_ (name . args) . body )
-                #'(define-coroutine (name . args)
-                    (yield 'alive)
-                    . body))))
 
 
 ;;;----------------------------------------------------------------------------
-;;;basic channel functions
+;;;basic channel coroutinetions
 ;;;---------------------------------------------------------------------------- 
 ;;create an async channel, no size limit by default
 (define (channel [size #f]) (make-async-channel size))
@@ -207,7 +216,7 @@
 
 
 ;;;--------------------------------------------------------------------------
-;;; Datapool Data Functions
+;;; Datapool Data coroutinetions
 ;;;--------------------------------------------------------------------------
 ;;create datapool data 
 (define (make-dp-data num-threads) 
@@ -256,7 +265,7 @@
 
 
 ;;;--------------------------------------------------------------------------
-;;; Start private datapool thread function defines
+;;; Start private datapool thread coroutinetion defines
 ;;;-------------------------------------------------------------------------- 
 ;; Get a thread pid at provided index
 (define (get-dp-thread idx)
@@ -354,7 +363,7 @@
         (semaphore-wait (get-dp-data-objects-sem))
         (hash (get-dp-data-objects) key obj)
         (semaphore-post (get-dp-data-objects-sem))
-        (define-coroutine 
+        (coroutine 
           (run-handler)
           (send (get-dp-data-object key) run))
         (go run-handler)
@@ -440,13 +449,13 @@
 ;; Returns: #t if task completed, #f if task not yet completed
 (define (dp-thread-exec-task thread-idx task evals-left)
   (let ([ret (task)])
-    (if (eqv? ret 'alive)
+    (if (task 'dead?) ;check if coroutine is dead
+        #t ;task completed
         (if (> evals-left 0)
             (dp-thread-exec-task thread-idx (- evals-left 1))
-            (begin 
-              (go task) ; place task at the back of a queue
-              #f)) ; task not yet completed
-        #t))) ; task completed
+            (let ()
+              (go task) ;place task at the back of a queue
+              #f))))) ;task not yet completed
 
 
 ;; Eternal thread tail recursion of executing tasks
@@ -462,7 +471,7 @@
   (dp-thread thread-idx))
 
 
-;; Thread startup function
+;; Thread startup coroutinetion
 (define (dp-thread-start)
   (let ([pid (current-thread)])
     (thread-suspend pid)
@@ -479,7 +488,7 @@
 ;;;---------------------------------------------------------------------------- 
 ;; Create a datapool environment. Setup worker threads and begin execution of 
 ;; the user defined main form. Returns datapool environment data vector needed
-;; as the argument for management functions like (close-dp).
+;; as the argument for management coroutinetions like (close-dp).
 (define (datapool num-threads dp-main)
   (let ([*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
         [*datapool-environment-data* (make-dp-data num-threads)]
@@ -487,7 +496,7 @@
         [*data-obj-free-key-q* (make-queue)])
     (if (> (get-num-dp-threads) 0)
         (let ()
-          (go dp-main) ;Execute the provided dp-main function
+          (go dp-main) ;Execute the provided dp-main coroutinetion
           #t)
         #f))) ;Currently, must have 1 thread for datapool execution
 
@@ -587,7 +596,7 @@
              (register-message-handler 
                msg-type
                (let ()
-                 (define-coroutine
+                 (coroutine
                    (handler-accessor)
                    (if (eqv? (get-dp-data-object dst-obj-key) #f)
                        #f
@@ -601,14 +610,14 @@
     ;; Create task to asynchronously set an object's field. set-field! 
     ;; should be inherently threadsafe (just like normal set!). 
     ;; Ex:
-    ;; (func (gimme-3) (+ 1 2))
+    ;; (coroutine (gimme-3) (+ 1 2))
     ;; (go (set-datum! my-field gimme-3))
     (define-syntax set-datum!
       (syntax-rules ()
         [(set-datum! field val) 
          (if (not (deleted?))
              (let ()
-               (define-coroutine
+               (coroutine
                  (set-handler)
                  (let ([obj (get-dp-data-object key)])
                    (if (eqv? obj #f)
@@ -636,7 +645,7 @@
              [(set-datum! key field val)
               (if (not (deleted?))
                   (let ()
-                    (define-coroutine
+                    (coroutine
                       (set-handler)
                       (let ([obj (get-dp-data-object key)])
                         (if (eqv? obj #f)
@@ -718,14 +727,14 @@
 ;; Run unit tests
 ;;;---------------------------------------------------------------------------- 
 (define (run-unit-tests [wait #f])
-  (define test-num 0)
+  (define test-num 1)
   (define (test-text text)
-    (let ([ret (string-append text (number->string test-num))])
+    (let ([ret (string-append text " " (number->string test-num))])
       (set! test-num (+ test-num 1))
       ret))
 
   ;;;---------------------------------------------------------------------------- 
-  ;;; Function Tests
+  ;;; coroutinetion Tests
   ;;;---------------------------------------------------------------------------- 
   ;;**************************************
   ;;TEST defined?
@@ -736,13 +745,13 @@
   ;;--------------------------------------
   (let ()
     (define x 3)
-    (test-true? "TEST defined? 0" (if (defined? x) #t #f) wait)
-    (test-true? "TEST defined? 1" (if (defined? y) #f #t) wait)
-    (test-true? "TEST test-true? 0" #t wait)
-    (test-true? "TEST test-true? 1" (not #f) wait)
-    (test-equal? "TEST test-equal? 0" 1 1 wait)
-    (test-equal? "TEST test-equal? 1" "test" "test" wait)
-    (test-equal? "TEST test-equal? 2" 'test 'test wait)
+    (test-true? "TEST defined? 1" (if (defined? x) #t #f) wait)
+    (test-true? "TEST defined? 2" (if (defined? y) #f #t) wait)
+    (test-true? "TEST test-true? 1" #t wait)
+    (test-true? "TEST test-true? 2" (not #f) wait)
+    (test-equal? "TEST test-equal? 3" 1 1 wait)
+    (test-equal? "TEST test-equal? 4" "test" "test" wait)
+    (test-equal? "TEST test-equal? 5" 'test 'test wait)
     ;Comparing lists apparently isn't part of eqv? or equal?
     ;(test-equal? "Is a list equal to itself?" '("test" "test2") '("test" "test2"))
     ;(test-pass "TEST test-pass" "pass text")
@@ -752,53 +761,14 @@
 
 
   ;;**************************************
-  ;;TEST define-coroutine 
-  ;;--------------------------------------
-  (let ()
-    (set! test-num 0)
-    (define-coroutine
-      (co-test1) 
-      (yield 1)
-      (yield 2))
-
-    (define co-test1-symbol (co-test1))
-
-
-    ;Test the coroutine runs correctly
-    (test-equal? (test-text "TEST define-coroutine ") (co-test1-symbol) 1 wait)
-    (test-equal? (test-text "TEST define-coroutine ") (co-test1-symbol) 2 wait)
-
-    (define-coroutine
-      (co-test2 arg1 arg2)
-      (yield arg1)
-      (yield arg2)
-      #f)
-
-    (define co-test2-symbol (co-test2 "teststring" 'test))
-
-    ;Test coroutine can be run with arguments
-    (test-equal? (test-text "TEST define-coroutine ") (co-test2-symbol)  "teststring" wait)
-    (test-equal? (test-text "TEST define-coroutine ") (co-test2-symbol)  'test wait)
-    (test-true? (test-text "TEST define-coroutine ") (not (co-test2-symbol)) wait)
-
-    (set! co-test2-symbol (co-test2 'test2 "teststring2"))
-
-    ;Test coroutine can be rerun with new arguments
-    (test-equal? (test-text "TEST define-coroutine ") (co-test2-symbol)  'test2 wait)
-    (test-equal? (test-text "TEST define-coroutine ") (co-test2-symbol)  "teststring2" wait)
-    (test-true? (test-text "TEST define-coroutine ") (not (co-test2-symbol))) wait)
-  ;;**************************************
-
-
-  ;;**************************************
-  ;;TEST func
+  ;;TEST coroutine
   ;;--------------------------------------
   (let ([arg1 3]
         [arg2 4])
 
-    (set! test-num 0)
+    (set! test-num 1)
 
-    (func
+    (coroutine
       (co-test1) 
       (yield 1)
       (yield 2)
@@ -806,16 +776,16 @@
 
     (define ct1 (co-test1))
 
-    (display "!!!!!!!! ~a\n" co-test1)
-    (display "!!!!!!!! ~a\n" ct1)
-
     ;Test the coroutine runs correctly
-    (test-equal? (test-text "TEST Func ") (ct1) 'alive wait)
-    (test-equal? (test-text "TEST Func ") (ct1) 1 wait)
-    (test-equal? (test-text "TEST Func ") (ct1) 2 wait)
-    (test-true? (test-text "TEST Func ") (not (ct1)) wait)
+    (test-true? "TEST coroutine alive" (ct1 'alive?) wait)
+    (test-equal? (test-text "TEST coroutine") (ct1) 1 wait)
+    (test-true? "TEST coroutine alive" (ct1 'alive?) wait)
+    (test-equal? (test-text "TEST coroutine") (ct1) 2 wait)
+    (test-true? "TEST coroutine alive" (ct1 'alive?) wait)
+    (test-true? (test-text "TEST coroutine") (not (ct1)) wait)
+    (test-true? "TEST coroutine dead" (ct1 'dead?) wait)
 
-    (func
+    (coroutine
       (co-test2 arg1 arg2)
       (yield arg1)
       (yield arg2)
@@ -824,32 +794,41 @@
     (define ct2 (co-test2 "teststring" 'test))
 
     ;Test coroutine can be run with arguments
-    (test-equal? (test-text "TEST Func ") (ct2) 'alive wait)
-    (test-equal? (test-text "TEST Func ") (ct2) "teststring" wait)
-    (test-equal? (test-text "TEST Func ") (ct2) 'test wait)
-    (test-true? (test-text "TEST Func ") (not (ct2)) wait)
+    (test-true? "TEST coroutine alive" (ct2 'alive?) wait)
+    (test-equal? (test-text "TEST coroutine") (ct2) "teststring" wait)
+    (test-true? "TEST coroutine alive" (ct2 'alive?) wait)
+    (test-equal? (test-text "TEST coroutine") (ct2) 'test wait)
+    (test-true? "TEST coroutine alive" (ct2 'alive?) wait)
+    (test-true? (test-text "TEST coroutine") (not (ct2)) wait)
+    (test-true? "TEST coroutine dead" (ct2 'dead?) wait)
 
     (set! ct2 (co-test2 'test2 "teststring2"))
 
     ;Test coroutine can be rerun with new arguments
-    (test-equal? (test-text "TEST Func ") (ct2) 'alive wait)
-    (test-equal? (test-text "TEST Func ") (ct2) 'test2 wait)
-    (test-equal? (test-text "TEST Func ") (ct2) "teststring2" wait)
-    (test-true? (test-text "TEST Func ") (ct2) wait)
+    (test-true? "TEST coroutine alive" (ct2 'alive?) wait)
+    (test-equal? (test-text "TEST coroutine") (ct2) 'test2 wait)
+    (test-true? "TEST coroutine alive" (ct2 'alive?) wait)
+    (test-equal? (test-text "TEST coroutine") (ct2) "teststring2" wait)
+    (test-true? "TEST coroutine alive" (ct2 'alive?) wait)
+    (test-true? (test-text "TEST coroutine") (not (ct2)) wait)
+    (test-true? "TEST coroutine dead" (ct2 'dead?) wait)
 
     ;Should *not* raise an exception due to the stateful (set!)
     (with-handlers ([exn:fail:user? (lambda (e) (test-fail e))])
-                   (func 
+                   (coroutine 
                      (co-test3 arg1)
                      (yield arg1)
                      (set! arg1 2)
-                     (yield arg2))
+                     (yield arg1))
                    (define ct3 (co-test3 1))
-                   (test-equal? (test-text "TEST Func ") (ct3) 'alive wait)
-                   (test-equal? (test-text "TEST Func ") (ct3) 1 wait)
-                   (test-equal? (test-text "TEST Func ") (ct3) 2 wait)
-                   (test-true? (test-text "TEST Func ") (ct3))) wait)
-  ;;**************************************
+                   (test-equal? (test-text "TEST coroutine") (ct3) 1 wait)
+                   (test-equal? (test-text "TEST coroutine") (ct3) 2 wait)
+                   ;Final argument of coroutine is a (yield) so we have to run 
+                   ;again to hit the end (even though there are no forms left 
+                   ;to evaluate)
+                   (test-equal? (test-text "TEST coroutine") (ct3) 2 wait)
+                   (test-true? "TEST coroutine dead" (ct3 'dead?) wait)))
+  ;;************************************** 
 
 
   ;;**************************************
@@ -1000,7 +979,7 @@
       (test-true? "" (hash? (get-dp-data-objects)) wait)
       (test-true? "" (semaphore? (get-dp-data-objects-sem)) wait)
 
-      ;Check key generation Function
+      ;Check key generation coroutinetion
       (test-equal? "" (gen-dp-data-obj-key) 0 wait)
       (test-equal? "" (gen-dp-data-obj-key) 1 wait)
       (test-equal? "" (gen-dp-data-obj-key) 2 wait)
@@ -1019,7 +998,7 @@
        [*datapool-environment-data* (make-dp-data num-threads)]
        [*data-obj-key-src* 0])
 
-      ;;Arbitrary function to execute
+      ;;Arbitrary coroutinetion to execute
       (define (test-task) #t)
 
       ;;Test defaults
@@ -1113,7 +1092,7 @@
 
       (define test-type 'test-type)
       (define (callback-form) 3)
-      ;Probably should rework this funcion to be simpler. However, it's not exposed
+      ;Probably should rework this coroutineion to be simpler. However, it's not exposed
       ;by the module and should only be used internally so it's probably fine for
       ;now
       (set-dp-message-handlers
@@ -1162,9 +1141,9 @@
       (test-equal? "" (ch-get (get-dp-parent-channel)) "test-string2" wait)
 
       (let ([ch (channel)])
-        (func (test-func)
+        (coroutine (test-coroutine)
                    (ch-put ch 'complete))
-        (go-dp test-dp-data test-func)
+        (go-dp test-dp-data test-coroutine)
         (sleep 1)
         (test-equal? "" (ch-get ch) 'complete wait))))
 
@@ -1208,15 +1187,15 @@
 
         (test-true? "" (dp-thread-exec-task 0 task 10) wait)
 
-        ;func coroutine that evaluates infinitely
-        (func 
+        ;coroutine coroutine that evaluates infinitely
+        (coroutine 
           (eval-infinity) 
           (eval-infinity))
 
         ;Should evaluate 10 times then return #f
         (test-true? "" (not (dp-thread-exec-task 0 eval-infinity 10)) wait))
 
-      ;Don't need to sleep as the current thread is actually running this func
+      ;Don't need to sleep as the current thread is actually running this coroutine
       (dp-thread 1)
       (test-true? "" (not (thread-dead? (get-dp-thread 1))) wait)
       (test-true? "" (not (thread-running? (get-dp-thread 1))) wait)
@@ -1229,7 +1208,7 @@
 
       (test-equal? "" (queue-length (get-dp-queue 1) 2) wait)
 
-      ;Don't need to sleep as the current thread is actually running this func
+      ;Don't need to sleep as the current thread is actually running this coroutine
       (dp-thread-start)
       (test-equal? "" (queue-length (get-dp-queue 0) 0) wait)
       (test-equal? "" (queue-length (get-dp-queue 1) 0) wait)))
@@ -1239,7 +1218,7 @@
   ;;TEST datapool
   ;;--------------------------------------
   (let ()
-    (func (main) 
+    (coroutine (main) 
                (let ([parent (get-dp-parent-channel)])
                  (ch-put parent "test string")))
 
