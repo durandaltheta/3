@@ -203,15 +203,8 @@
 ;;;--------------------------------------------------------------------------
 ;;; Globals and global forward declarations
 ;;;--------------------------------------------------------------------------
-;; Current datapool environment data
-(define *datapool-environment-data* #f)
-
 ;; Number of times a coroutine is to be evaluated in a row before swapping tasks
 (define *dp-thread-continuous-eval-limit* 10) 
-
-;; global counter for data object hash keys
-(define *data-obj-key-src* 0)
-(define *data-obj-free-key-q* #f)
 
 
 
@@ -219,48 +212,54 @@
 ;;; Datapool Data coroutinetions
 ;;;--------------------------------------------------------------------------
 ;;create datapool data 
-(define (make-dp-data num-threads) 
-  (box ;return a 'by reference' symbol
-    (vector 
-      ;thread id's, queues, and semaphores
-      (make-vector 
-        num-threads 
-        (make-vector 
-          (thread (thunk (dp-thread-start))) ;threads
-          (make-queue) ;thread task queues
-          (make-semaphore 1))) ;thread task queue semaphores
-      (make-vector 
-        (make-hash) ;hash table of data objects
-        (make-hash) ;hash table of lists of message handlers
-        (make-semaphore 1) ;data hash semaphore
-        (make-semaphore 1)) ;message handlers semaphore
-      (make-vector 
-        (channel #f) ;parentch-putdatapool channel
-        (channel #f) ;datapoolch-putparent channel
-        (make-semaphore))))) ;datapoolch-putparent channel semaphore
+(define (make-dp-data num-threads eval-limit) 
+  (let ([ret (box #f)]
+        [key-src 0])
+    (set-box! ret 
+              (vector 
+                ;thread id's, queues, and semaphores
+                (make-vector ;thread and task queue vector
+                  num-threads 
+                  (vector 
+                    (thread (thunk (dp-thread-start ret))) ;threads
+                    (make-queue) ;thread task queues
+                    (make-semaphore 1))) ;thread task queue semaphores 
+                (vector ;message handler vector
+                  (make-hash) ;hash table of data objects
+                  (make-hash) ;hash table of lists of message handlers
+                  (make-semaphore 1) ;data hash semaphore
+                  (make-semaphore 1)) ;message handlers semaphore
+                (vector ;datapool channel vector
+                  (channel #f) ;parent->tdatapool channel
+                  (channel #f) ;datapool->parent channel
+                  (make-semaphore)) ;datapool->parent channel semaphore 
+                (vector ;data object vector
+                  key-src ;data-obj-key-src
+                  (make-queue)) ;data-obj-free-key-q 
+                (vector ;evaluation rules vector
+                  eval-limit)))
+    ret)) ;return a 'by reference' symbol
 
 
 ;; Return the datapool's data
-(define (get-dp-data)
-  (unbox *datapool-environment-data*))
+(define (get-dp-data env)
+  (unbox env))
 
 
 ;; Return number of threads in the datapool
-(define (get-num-dp-threads) 
-  (vector-length (vector-ref (get-dp-data) 0)))
+(define (get-num-dp-threads env) 
+  (vector-length (vector-ref (get-dp-data env) 0)))
 
 
 ;;kill all threads in a datapool
-(define (close-dp dp-data)
-  (let ([data (unbox dp-data)])
-    (for ([i (vector-length (vector-ref data 0))])
-         (kill-thread (car (vector-ref (vector-ref data 0) i))))))
+(define (close-dp env)
+  (for ([i (vector-length (vector-ref (get-dp-data env) 0))])
+       (kill-thread (car (vector-ref (vector-ref (get-dp-data env) 0) i)))))
 
 
 ;; Get the communication parentch-putdatapool channel
-(define (get-datapool-channel dp-data) 
-  (let ([data (unbox dp-data)])
-    (vector-ref (vector-ref data 2) 0))) 
+(define (get-datapool-channel env) 
+  (vector-ref (vector-ref (get-dp-data env) 2) 0))
 
 
 
@@ -268,56 +267,65 @@
 ;;; Start private datapool thread coroutinetion defines
 ;;;-------------------------------------------------------------------------- 
 ;; Get a thread pid at provided index
-(define (get-dp-thread idx)
-  (vector-ref (vector-ref (vector-ref (get-dp-data) 0) idx) 0))
+(define (get-dp-thread env idx)
+  (vector-ref (vector-ref (vector-ref (get-dp-data env) 0) idx) 0))
 
 
 ;; Get a thread task queue at provided index
-(define (get-dp-queue idx)
-  (vector-ref (vector-ref (vector-ref (get-dp-data) 0) idx) 1))
+(define (get-dp-queue env idx)
+  (vector-ref (vector-ref (vector-ref (get-dp-data env) 0) idx) 1))
 
 
 ;; Get a thread task queue semaphore at provided index
-(define (get-dp-queue-sem idx)
-  (vector-ref (vector-ref (vector-ref (get-dp-data) 0) idx) 2))
+(define (get-dp-queue-sem env idx)
+  (vector-ref (vector-ref (vector-ref (get-dp-data env) 0) idx) 2))
 
 
 ;; Get the hash of data objects
-(define (get-dp-data-objects)
-  (vector-ref (vector-ref (get-dp-data) 1) 0))
+(define (get-dp-data-objects env)
+  (vector-ref (vector-ref (get-dp-data env) 1) 0))
 
 
 ;; Get the data objects semaphore
-(define (get-dp-data-objects-sem)
-  (vector-ref (vector-ref (get-dp-data) 1) 2)) 
+(define (get-dp-data-objects-sem env)
+  (vector-ref (vector-ref (get-dp-data env) 1) 2))  
+
+
+;; Get the data object current new key source integer
+(define (get-data-obj-key-src env)
+  (vector-ref (vector-ref (get-dp-data env) 3) 0))
+
+
+;; Get the queue of freed data keys
+(define (get-data-obj-free-key-q env)
+  (vector-ref (vector-ref (get-dp-data env) 3) 1))
+
+
+(define (get-dp-thread-continuous-eval-limit env)
+  (vector-ref (vector-ref (get-dp-data env) 4) 0))
 
 
 ;; Add a recycled data object key to the container queue
-(define (add-free-dp-data-key key) 
-  (when (queue? *data-obj-free-key-q* #f)
-    (enqueue! *data-obj-free-key-q* key)))
+(define (add-free-dp-data-key env key) 
+  (when (queue? (get-data-obj-free-key-q env) #f)
+    (enqueue! (get-data-obj-free-key-q env) key)))
 
 
 ;; Generate a new data object hash key
-(define (gen-dp-data-obj-key) 
-  (let ([ret *data-obj-key-src*])
-    (if (> 
-          (if (queue? *data-obj-free-key-q* #f)
-              (queue-length *data-obj-free-key-q*)
-              0) 
-          0)
-        (dequeue! *data-obj-free-key-q*)
-        (let ()
-          (set! *data-obj-key-src* (+ *data-obj-key-src* 1))
-          ret))))
+(define (gen-dp-data-obj-key env) 
+  (if (> (queue-length (get-data-obj-free-key-q env)) 0) 
+      (dequeue! (get-data-obj-free-key-q env))
+      (let ([ret (get-data-obj-key-src env)])
+        (set! (get-data-obj-key-src env) (+ (get-data-obj-key-src env) 1))
+        ret)))
 
 
 ;; Get the index of the fullest thread task queue
-(define (get-max-dp-q-idx)
-  (define longest '((queue-length (get-dp-queue 0)) 0))
-  (when (> (get-num-dp-threads) 1)
-    (for ([i (in-range 1 (get-num-dp-threads))])
-         (let ([cur-q-len (queue-length (get-dp-queue i))])
+(define (get-max-dp-q-idx env)
+  (define longest '((queue-length (get-dp-queue env 0)) 0))
+  (when (> (get-num-dp-threads env) 1)
+    (for ([i (in-range 1 (get-num-dp-threads env))])
+         (let ([cur-q-len (queue-length (get-dp-queue env i))])
            (when (> (car longest) cur-q-len)
              (begin
                (set! longest '(cur-q-len i)))))))
@@ -325,103 +333,96 @@
 
 
 ;; Get the index of the emptiest thread task queue
-(define (get-min-dp-q-idx)
-  (define shortest '((queue-length (get-dp-queue 0)) 0))
-  (when (> (get-num-dp-threads) 1)
-    (for ([i (in-range 1 (get-num-dp-threads))])
-         (let ([cur-q-len (queue-length (get-dp-queue i))])
+(define (get-min-dp-q-idx env)
+  (define shortest '((queue-length (get-dp-queue env 0)) 0))
+  (when (> (get-num-dp-threads env) 1)
+    (for ([i (in-range 1 (get-num-dp-threads env))])
+         (let ([cur-q-len (queue-length (get-dp-queue env i))])
            (when (< (car shortest) cur-q-len)
              (begin
                (set! shortest '(cur-q-len i)))))))
   (cdr shortest))
 
 
-;;Enqueues task expresion to the emptiest thread queue and resumes the 
+;;Enqueues coroutine instance to the emptiest thread queue and resumes the 
 ;;thread. The task is typically internally a coroutine
-(define (go task)
-  (let ([q-idx (get-min-dp-q-idx)])
-    (semaphore-wait (get-dp-queue-sem q-idx))
-    (enqueue! (get-dp-queue q-idx) task)
-    (semaphore-post (get-dp-queue-sem q-idx))
-    (thread-resume (get-dp-thread q-idx))
+(define (go env coroutine)
+  (let ([q-idx (get-min-dp-q-idx env)])
+    (semaphore-wait (get-dp-queue-sem env q-idx))
+    (enqueue! (get-dp-queue env q-idx) task)
+    (semaphore-post (get-dp-queue-sem env q-idx))
+    (thread-resume (get-dp-thread env q-idx))
     #t))
 
 
-;;Apply (go form) to given task within the given dp-data environment. 
-;;This works because dp-data is a box that accesses the internally stored 
-;;datapool environment data "by reference"
-(define (go-dp dp-data task)
-  (let ([*datapool-environment-data* dp-data])
-    (go task)))
-
-
 ;; Hash new data object
-(define (hash-dp-data-object key obj)
-  (if (not (get-dp-data-object key) #f)
+(define (hash-dp-data-object env key obj)
+  (if (not (get-dp-data-object env key) #f)
       #f ;we've run out of possible hash table values and looped?
       (let ()
-        (semaphore-wait (get-dp-data-objects-sem))
-        (hash (get-dp-data-objects) key obj)
-        (semaphore-post (get-dp-data-objects-sem))
+        (semaphore-wait (get-dp-data-objects-sem env))
+        (hash (get-dp-data-objects env) key obj)
+        (semaphore-post (get-dp-data-objects-sem env))
         (coroutine 
           (run-handler)
-          (send (get-dp-data-object key) run))
-        (go run-handler)
+          (send (get-dp-data-object env key) run))
+        (define rh (run-handler))
+        (go env rh)
         #t)))
 
 
 ;; Get a data object from the hash
-(define (get-dp-data-object key)
-  (hash-ref (get-dp-data-objects) key #f))
+(define (get-dp-data-object env key)
+  (hash-ref (get-dp-data-objects env) key #f))
 
 
 ;; Delete and remove a data object from the hash
-(define (delete-dp-data-object key)
-  (semaphore-wait (get-dp-data-objects-sem))
-  (hash-set! (get-dp-data-objects) key #f)
-  (semaphore-post (get-dp-data-objects-sem))
+(define (delete-dp-data-object env key)
+  (semaphore-wait (get-dp-data-objects-sem env))
+  (hash-set! (get-dp-data-objects env) key #f)
+  (semaphore-post (get-dp-data-objects-sem env))
   #t)
 
 
 ;; Get the hash of message callback handlers
-(define (get-dp-message-handlers)
-  (vector-ref (vector-ref (get-dp-data) 1) 1))
+(define (get-dp-message-handlers env)
+  (vector-ref (vector-ref (get-dp-data env) 1) 1))
 
 
 ;; Get the message callback handlers semaphore
-(define (get-dp-message-handlers-sem)
-  (vector-ref (vector-ref (get-dp-data) 1) 3))
+(define (get-dp-message-handlers-sem env)
+  (vector-ref (vector-ref (get-dp-data env) 1) 3))
 
 
 ;; Set the global message handlers to something new
-(define (set-dp-message-handlers handlers) 
-  (semaphore-wait (get-dp-message-handlers-sem))
-  (vector-set! (vector-ref (get-dp-data) 1) 3 handlers)
-  (semaphore-post (get-dp-message-handlers-sem)))
+(define (set-dp-message-handlers env handlers) 
+  (semaphore-wait (get-dp-message-handlers-sem env))
+  (vector-set! (vector-ref (get-dp-data env) 1) 3 handlers)
+  (semaphore-post (get-dp-message-handlers-sem env)))
 
 
-(define (get-dp-parent-channel) 
-  (vector-ref (vector-ref (get-dp-data) 2) 1))
+(define (get-dp-parent-channel env) 
+  (vector-ref (vector-ref (get-dp-data env) 2) 1))
 
 
 ;; Get the semaphore for the parentch-putdp channel
-(define (get-dp-parent-ch-sem)
-  (vector-ref (vector-ref (get-dp-data) 2) 2))
+(define (get-dp-parent-ch-sem env)
+  (vector-ref (vector-ref (get-dp-data env) 2) 2))
 
 
 ;; Send info from the datapool to the parent
-(define (send-to-datapool-parent form)
-  (semaphore-wait (get-dp-parent-ch-sem))
-  (ch-put (get-dp-parent-channel))
-  (semaphore-post (get-dp-parent-ch-sem)))
+(define (send-to-datapool-parent env form)
+  (semaphore-wait (get-dp-parent-ch-sem env))
+  (ch-put (get-dp-parent-channel env))
+  (semaphore-post (get-dp-parent-ch-sem env)))
 
 
 ;; Return thread's queue index if not empty, otherwise gets the index of the 
 ;; fullest queue.
-(define (get-task-q-idx thread-idx)
-  (let ([thread-queue (get-dp-queue thread-idx)])
+(define (get-task-q-idx env thread-idx)
+  (let ([thread-queue (get-dp-queue env thread-idx)])
     (if (eqv? (queue-length thread-queue) 0)
-        (let ([highest-idx (get-max-dp-q-idx)])
+        (let ([highest-idx (get-max-dp-q-idx env)])
           (if (eqv? (queue-length (get-dp-queue highest-idx)) 0) 
               (thread-suspend (current-thread))
               (highest-idx)))
@@ -429,17 +430,17 @@
 
 
 ;; Return a task from a thread queue to execute
-(define (get-task thread-idx)
-  (let ([q-idx (get-task-q-idx thread-idx)])
-    (semaphore-wait (get-dp-queue-sem q-idx))
-    (if (queue-empty? (get-dp-queue q-idx))
+(define (get-task env thread-idx)
+  (let ([q-idx (get-task-q-idx env thread-idx)])
+    (semaphore-wait (get-dp-queue-sem env q-idx))
+    (if (queue-empty? (get-dp-queue env q-idx))
         (let ()
-          (semaphore-post (get-dp-queue-sem q-idx))
+          (semaphore-post (get-dp-queue-sem env q-idx))
           #f)
         (let ()
           (define task #f)
-          (set! task (dequeue! (get-dp-queue q-idx)))
-          (semaphore-post (get-dp-queue-sem q-idx))
+          (set! task (dequeue! (get-dp-queue env q-idx)))
+          (semaphore-post (get-dp-queue-sem env q-idx))
           task))))
 
 
@@ -447,36 +448,37 @@
 ;; evaluations in coroutines. If provided task is *not* a coroutine and/or 
 ;; that coroutine does not (yield) intelligently this may have no effect.
 ;; Returns: #t if task completed, #f if task not yet completed
-(define (dp-thread-exec-task thread-idx task evals-left)
+(define (dp-thread-exec-task env thread-idx task evals-left)
   (let ([ret (task)])
     (if (task 'dead?) ;check if coroutine is dead
         #t ;task completed
         (if (> evals-left 0)
-            (dp-thread-exec-task thread-idx (- evals-left 1))
+            (dp-thread-exec-task env thread-idx (- evals-left 1))
             (let ()
-              (go task) ;place task at the back of a queue
+              (go env task) ;place task at the back of a queue
               #f))))) ;task not yet completed
 
 
 ;; Eternal thread tail recursion of executing tasks
-(define (dp-thread thread-idx) 
-  (let ([task (get-task thread-idx)])
+(define (dp-thread env thread-idx) 
+  (let ([task (get-task env thread-idx)])
     (if (eqv? task #f)
         (thread-suspend)
         ;execute the task we get 
-        (dp-thread-exec-task 
+        (dp-thread-exec-task
+          env 
           thread-idx 
-          (get-task thread-idx) 
-          *dp-thread-continuous-eval-limit*)))
+          (get-task env thread-idx) 
+          (get-dp-thread-continuous-eval-limit env))))
   (dp-thread thread-idx))
 
 
 ;; Thread startup coroutinetion
-(define (dp-thread-start)
+(define (dp-thread-start env)
   (let ([pid (current-thread)])
     (thread-suspend pid)
     (define thread-num 0)
-    (for ([i (get-num-dp-threads)])
+    (for ([i (get-num-dp-threads env)])
          (when (eqv? (get-dp-thread i) pid) 
            (set! thread-num i)))
     (dp-thread thread-num)))
@@ -488,16 +490,15 @@
 ;;;---------------------------------------------------------------------------- 
 ;; Create a datapool environment. Setup worker threads and begin execution of 
 ;; the user defined main form. Returns datapool environment data vector needed
-;; as the argument for management coroutinetions like (close-dp).
+;; as the argument for management coroutinetions like (close-dp). To kick off 
+;; datapool execution evaluate a (go env form). Form can be any arbitrary form,
+;; *or* it can be a data object registered with the environment via the (data) 
+;; macro below
 (define (datapool num-threads dp-main)
-  (let ([*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
-        [*datapool-environment-data* (make-dp-data num-threads)]
-        [*data-obj-key-src* 0]
-        [*data-obj-free-key-q* (make-queue)])
-    (if (> (get-num-dp-threads) 0)
-        (let ()
-          (go dp-main) ;Execute the provided dp-main coroutinetion
-          #t)
+  (let* ([eval-limit 10]
+         [env (make-dp-data num-threads eval-limit)])
+    (if (> (get-num-dp-threads env) 0)
+        env
         #f))) ;Currently, must have 1 thread for datapool execution
 
 
@@ -528,6 +529,7 @@
     (data-interface)
     (init-field 
       key
+      env
       [deleted #f])
     (super-new)
 
@@ -675,19 +677,32 @@
 ;; Create and register a new data object with the datapool. Do not (emit), 
 ;; (connect), (set-datum!), or (go) in the object arguments or you may have a 
 ;; bad time.
-(define-syntax-rule 
-  (data (name% . params) body ...)
-  (let ([new-key (gen-dp-data-obj-key)])
-    (hash-dp-data-object new-key 
-                         (let ([name%
-                                 (class data%
-                                        (super-new)
-                                        (init-rest)
-                                        (define/public (run)
-                                                       body
-                                                       ...)
-                                        (get-datum key))])
-                           (make-object name% key . params))))) 
+(define-syntax data
+  (syntax-rules ()
+    [(data (name% env . params) body ...) ;for use at the parent level
+     (let ([new-key (gen-dp-data-obj-key)])
+       (hash-dp-data-object new-key 
+                            (let ([name%
+                                    (class data%
+                                           (super-new)
+                                           (init-rest)
+                                           (define/public (run)
+                                                          body
+                                                          ...)
+                                           (get-datum key))])
+                              (make-object name% key env . params))))]
+    [(data (name% . params) body ...) ;for use inside a data object
+     (let ([new-key (gen-dp-data-obj-key)])
+       (hash-dp-data-object new-key 
+                            (let ([name%
+                                    (class data%
+                                           (super-new)
+                                           (init-rest)
+                                           (define/public (run)
+                                                          body
+                                                          ...)
+                                           (get-datum key))])
+                              (make-object name% key env . params))))]))
 
 
 ;; Data object destructor. Sets object to the 'deleted state, removes object 
@@ -733,9 +748,7 @@
       (set! test-num (+ test-num 1))
       ret))
 
-  ;;;---------------------------------------------------------------------------- 
-  ;;; coroutinetion Tests
-  ;;;---------------------------------------------------------------------------- 
+
   ;;**************************************
   ;;TEST defined?
   ;;     test-true? 
@@ -751,12 +764,7 @@
     (test-true? "TEST test-true? 2" (not #f) wait)
     (test-equal? "TEST test-equal? 3" 1 1 wait)
     (test-equal? "TEST test-equal? 4" "test" "test" wait)
-    (test-equal? "TEST test-equal? 5" 'test 'test wait)
-    ;Comparing lists apparently isn't part of eqv? or equal?
-    ;(test-equal? "Is a list equal to itself?" '("test" "test2") '("test" "test2"))
-    ;(test-pass "TEST test-pass" "pass text")
-    ;(test-fail "TEST test-fail' work?" "fail text"))
-    )
+    (test-equal? "TEST test-equal? 5" 'test 'test wait))
   ;;**************************************
 
 
@@ -832,40 +840,32 @@
 
 
   ;;**************************************
-  ;;TEST channel
+  ;;TEST channel ch-get ch-put
   ;;--------------------------------------
   (let ([ch (channel)])
-    (test-true? "" (async-channel? ch)) wait)
-  ;;**************************************
+    (test-true? "TEST channel creation" (async-channel? ch)) wait)
 
-
-  ;;**************************************
-  ;;TEST ch-get
-  ;;--------------------------------------
   (let ([ch (channel)])
     (async-channel-put ch "teststring")
     (let ([ret (ch-get ch #f)])
-      (test-equal? "" ret "teststring")) wait)
+      (test-equal? "TEST ch-get can get a string" ret "teststring")) wait)
 
   (let ([ch (channel)])
     (async-channel-put ch "teststring2")
     (let ([ret (ch-get ch)])
-      (test-equal? "" ret "teststring2")) wait)
-  ;;**************************************
+      (test-equal? "TEST ch-get can get a different string" 
+                   ret 
+                   "teststring2") wait))
 
-
-  ;;**************************************
-  ;;TEST ch-put
-  ;;--------------------------------------
   (let ([ch (channel)])
     (ch-put ch "teststring")
     (let ([ret (ch-get ch #f)])
-      (test-equal? "" ret "teststring")) wait)
+      (test-equal? "TEST ch-put a string" ret "teststring")) wait)
 
   (let ([ch (channel)])
     (ch-put ch "teststring2")
     (let ([ret (ch-get ch)])
-      (test-equal? "" ret "teststring2")) wait)
+      (test-equal? "TEST ch-put another string" ret "teststring2")) wait)
   ;;**************************************
 
 
@@ -1116,8 +1116,8 @@
   ;;**************************************
   ;;TEST get-dp-parent-channel
   ;;     get-dp-parent-ch-sem
-  ;;     send-to-datapool-parent
-  ;;     go-dp
+  ;;     send-to-datapool-parent 
+  ;;     go ;from parent
   ;;--------------------------------------
   (let ([num-threads 2])
     (let 
@@ -1143,7 +1143,7 @@
       (let ([ch (channel)])
         (coroutine (test-coroutine)
                    (ch-put ch 'complete))
-        (go-dp test-dp-data test-coroutine)
+        (go test-dp-data test-coroutine)
         (sleep 1)
         (test-equal? "" (ch-get ch) 'complete wait))))
 
