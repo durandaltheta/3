@@ -78,9 +78,9 @@
       (set! *failed-tests* (append *failed-tests* (list test-string))))))
 
 ;Print final test results
-(define (print-test-results)
+(define (print-test-section-report)
   (printf "\nNumber of test passes: ~a\n" *num-passes*)
-  (printf "Number of test passes: ~a\n\n" *num-fails*)
+  (printf "Number of test failures: ~a\n\n" *num-fails*)
   (printf "Failed tests:\n")
   (for ([i *failed-tests*])
        (printf "\t~a" i))
@@ -93,7 +93,7 @@
       (set! *cur-test-section* name)
       (if *tests-started*
         (let ()
-          (print-test-results)
+          (print-test-section-report)
           (printf "\n\n"))
         (set! *tests-started* #t))
       (print-test-divider "#")
@@ -468,7 +468,7 @@
 
 ;; Hash new data object
 (define (hash-dp-data-object env key obj)
-  (if (not (get-dp-data-object env key) #f)
+  (if (not (get-dp-data-object env key))
     #f ;we've run out of possible hash table values and looped?
     (let ()
       (semaphore-wait (get-dp-data-objects-sem env))
@@ -1440,4 +1440,4 @@
   ;;;---------------------------------------------------------------------------- 
   ;;; Closing Analysis
   ;;;---------------------------------------------------------------------------- 
-  (print-test-results))
+  (print-test-section-report))
