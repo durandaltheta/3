@@ -831,7 +831,7 @@
 ;;;---------------------------------------------------------------------------- 
 ;; Run unit tests
 ;;;---------------------------------------------------------------------------- 
-(define (run-unit-tests [print-result #f] [wait #f])
+(define (run-unit-tests [print-result #t] [wait #f])
   (reset-test-results)
   (define test-num 1)
   (define (test-text text)
@@ -1245,7 +1245,19 @@
                  (hash-ref (get-dp-message-handlers env) test-type) 
                  (list callback-form callback-form-2) 
                  print-result 
-                 wait))
+                 wait)
+    (let ([pre-handlers (list callback-form callback-form-2)]
+          [post-handlers (hash-ref (get-dp-message-handlers env) test-type) ])
+      (for ([i (length pre-handlers)])
+           (let ([str 
+                   (let ([o (open-output-string)])
+                     (fprintf o "compare callback results ~a" i)
+                     (get-output-string o))])
+             (test-equal? str
+                          ((list-ref pre-handlers i))
+                          ((list-ref post-handlers i))
+                          print-result
+                          wait)))))
   ;;**************************************
 
   ;;**************************************
@@ -1257,8 +1269,8 @@
   (let* ([num-threads 2]
          [eval-limit 10]
          [env (make-dp-data num-threads eval-limit)])
-    (test-equal? "" (channel? (get-dp-parent-channel env)) print-result wait)
-    (test-equal? "" (semaphore? (get-dp-parent-ch-sem env)) print-result wait)
+    (test-equal? "get-dp-parent-channel" (channel? (get-dp-parent-channel env)) print-result wait)
+    (test-equal? "get-dp-parent-ch-sem" (semaphore? (get-dp-parent-ch-sem env)) print-result wait)
 
     (ch-put (get-dp-parent-channel) #t)
     (test-true? "" (ch-get (get-dp-parent-channel env)) print-result wait)
@@ -1270,82 +1282,83 @@
     (test-true? "" (ch-get (get-dp-parent-channel env)) print-result wait)
 
     (send-to-datapool-parent "test-string2")
-    (test-equal? "" (ch-get (get-dp-parent-channel env)) "test-string2" print-result wait)
-    ;;**************************************
+    (test-equal? "" (ch-get (get-dp-parent-channel env)) "test-string2" print-result wait))
+  ;;**************************************
 
-    ;;**************************************
-    ;;TEST get-task-q-idx
-    ;;     get-task
-    ;;     dp-thread-exec-task
-    ;;     dp-thread
-    ;;     dp-thread-start
-    ;;     go
-    ;;     go ;from parent
-    ;;--------------------------------------
-    (let* ([num-threads 2]
-           [eval-limit 10]
-           [env (make-dp-data num-threads eval-limit)])
-      (test-equal? "" (get-task-q-idx env 0) 0 print-result wait)
-      (test-equal? "" (get-task-q-idx env 1) 1 print-result wait)
+  ;;**************************************
+  ;;TEST get-task-q-idx
+  ;;     get-task
+  ;;     dp-thread-exec-task
+  ;;     dp-thread
+  ;;     dp-thread-start
+  ;;     go
+  ;;     go ;from parent
+  ;;--------------------------------------
+  (TEST-SECTION "datapool thread internal functions")
+  (let* ([num-threads 2]
+         [eval-limit 10]
+         [env (make-dp-data num-threads eval-limit)])
+    (test-equal? "" (get-task-q-idx env 0) 0 print-result wait)
+    (test-equal? "" (get-task-q-idx env 1) 1 print-result wait)
 
-      (define (test-task) #t)
-      (enqueue! (get-dp-queue env 1) test-task)
+    (define (test-task) #t)
+    (enqueue! (get-dp-queue env 1) test-task)
 
-      (test-equal? "" (get-task-q-idx env 0) 1 print-result wait)
-      (test-equal? "" (get-task-q-idx env 1) 1 print-result wait)
+    (test-equal? "" (get-task-q-idx env 0) 1 print-result wait)
+    (test-equal? "" (get-task-q-idx env 1) 1 print-result wait)
 
-      (enqueue! (get-dp-queue env 0) test-task)
+    (enqueue! (get-dp-queue env 0) test-task)
 
-      (test-equal? "" (get-task-q-idx env 0) 0 print-result wait)
-      (test-equal? "" (get-task-q-idx env 1) 1 print-result wait)
+    (test-equal? "" (get-task-q-idx env 0) 0 print-result wait)
+    (test-equal? "" (get-task-q-idx env 1) 1 print-result wait)
 
-      (enqueue! (get-dp-queue env 0) test-task)
+    (enqueue! (get-dp-queue env 0) test-task)
 
-      (test-equal? "" (get-task-q-idx env 0) 0 print-result wait)
-      (test-equal? "" (get-task-q-idx env 1) 0 print-result wait)
+    (test-equal? "" (get-task-q-idx env 0) 0 print-result wait)
+    (test-equal? "" (get-task-q-idx env 1) 0 print-result wait)
 
-      (let ([len-0 (queue-length (get-dp-queue env 0))]
-            [task (get-task env 0)])
-        (test-true? "" (> len-0 (queue-length (get-dp-queue env))) print-result wait)
+    (let ([len-0 (queue-length (get-dp-queue env 0))]
+          [task (get-task env 0)])
+      (test-true? "" (> len-0 (queue-length (get-dp-queue env))) print-result wait)
 
-        (test-true? "" (dp-thread-exec-task env 0 task 10) print-result wait)
+      (test-true? "" (dp-thread-exec-task env 0 task 10) print-result wait)
 
-        ;coroutine coroutine that evaluates infinitely
-        (coroutine 
-          (eval-infinity) 
-          (eval-infinity))
+      ;coroutine coroutine that evaluates infinitely
+      (coroutine 
+        (eval-infinity) 
+        (eval-infinity))
 
-        ;Should evaluate 10 times then return #f
-        (test-true? "" (not (dp-thread-exec-task env 0 eval-infinity 10)) print-result wait))
+      ;Should evaluate 10 times then return #f
+      (test-true? "" (not (dp-thread-exec-task env 0 eval-infinity 10)) print-result wait))
 
-      ;Don't need to sleep as the current thread is actually running this coroutine
-      (dp-thread 1)
-      (test-true? "" (not (thread-dead? (get-dp-thread env 1))) print-result wait)
-      (test-true? "" (not (thread-running? (get-dp-thread env 1))) print-result wait)
-      (test-true? "" (thread-running? (current-thread)) print-result wait)
-      (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
-      (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
+    ;Don't need to sleep as the current thread is actually running this coroutine
+    (dp-thread 1)
+    (test-true? "" (not (thread-dead? (get-dp-thread env 1))) print-result wait)
+    (test-true? "" (not (thread-running? (get-dp-thread env 1))) print-result wait)
+    (test-true? "" (thread-running? (current-thread)) print-result wait)
+    (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
+    (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
 
-      (enqueue! (get-dp-queue env 1) test-task)
-      (enqueue! (get-dp-queue env 1) test-task)
+    (enqueue! (get-dp-queue env 1) test-task)
+    (enqueue! (get-dp-queue env 1) test-task)
 
-      (test-equal? "" (queue-length (get-dp-queue env 1)) 2 print-result wait)
+    (test-equal? "" (queue-length (get-dp-queue env 1)) 2 print-result wait)
 
-      ;resume thread execution
-      (go env test-task) 
-      (sleep 0.1)
+    ;resume thread execution
+    (go env test-task) 
+    (sleep 0.1)
 
-      ;threads should be completed and asleep again
-      ;q0-size: 0, q1-size: 0
-      (test-equal? "get-min-dp-q-idx 5" (get-min-dp-q-idx env) 0 print-result wait)
-      (test-equal? "get-max-dp-q-idx 5" (get-max-dp-q-idx env) 0 print-result wait)
-      (test-equal? "q-len idx 0" (queue-length (get-dp-queue env 0)) 0 print-result wait)
-      (test-equal? "q-len idx 1" (queue-length (get-dp-queue env 1)) 0 print-result wait)
+    ;threads should be completed and asleep again
+    ;q0-size: 0, q1-size: 0
+    (test-equal? "get-min-dp-q-idx 5" (get-min-dp-q-idx env) 0 print-result wait)
+    (test-equal? "get-max-dp-q-idx 5" (get-max-dp-q-idx env) 0 print-result wait)
+    (test-equal? "q-len idx 0" (queue-length (get-dp-queue env 0)) 0 print-result wait)
+    (test-equal? "q-len idx 1" (queue-length (get-dp-queue env 1)) 0 print-result wait)
 
-      ;Don't need to sleep as the current thread is actually running this coroutine
-      (dp-thread-start)
-      (test-equal? "" (queue-length (get-dp-queue env 0) 0) print-result wait)
-      (test-equal? "" (queue-length (get-dp-queue env 1) 0) print-result wait))
+    ;Don't need to sleep as the current thread is actually running this coroutine
+    (dp-thread-start)
+    (test-equal? "" (queue-length (get-dp-queue env 0) 0) print-result wait)
+    (test-equal? "" (queue-length (get-dp-queue env 1) 0) print-result wait)
 
     (let ([ch (channel)])
       (coroutine (test-coroutine)
