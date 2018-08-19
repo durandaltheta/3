@@ -10,8 +10,8 @@
          channel ;create an asynchronous channel
          ch-get ;get form from a channel
          ch-put ;send form into a channel
-         get-datapool-channel ;get the channel to send messages into the dp
-         send-to-datapool-parent ;send data to the datapool's parent scope
+         get-datapool-input-channel ;get the channel to send messages into the dp
+         send-to-datapool-output-channel ;send data to the datapool's parent scope
          data ;create data object and register it in the datapool 
          get-dp-data-object ;get an object via its key
          message% ;create a message object with a given type and arguments
@@ -317,7 +317,7 @@
                 (vector ;datapool channel vector
                   (channel #f) ;parent->tdatapool channel
                   (channel #f) ;datapool->parent channel
-                  (make-semaphore)) ;datapool->parent channel semaphore 
+                  (make-semaphore 1)) ;datapool->parent channel semaphore 
                 (vector ;data object vector
                   key-src ;data-obj-key-src
                   (make-queue)) ;data-obj-free-key-q 
@@ -351,7 +351,7 @@
 
 
 ;; Get the communication parentch-putdatapool channel
-(define (get-datapool-channel env) 
+(define (get-datapool-input-channel env) 
   (vector-ref (vector-ref (get-dp-data env) 2) 0))
 
 
@@ -499,7 +499,7 @@
 
 
 ;; Get the parent->dp channel
-(define (get-dp-parent-channel env) 
+(define (get-datapool-output-channel env) 
   (vector-ref (vector-ref (get-dp-data env) 2) 1))
 
 
@@ -509,9 +509,9 @@
 
 
 ;; Send info from the datapool to the parent
-(define (send-to-datapool-parent env form)
+(define (send-to-datapool-output-channel env form)
   (semaphore-wait (get-dp-parent-ch-sem env))
-  (ch-put (get-dp-parent-channel env))
+  (ch-put (get-datapool-output-channel env) form)
   (semaphore-post (get-dp-parent-ch-sem env)))
 
 
@@ -521,10 +521,10 @@
   (let ([thread-queue (get-dp-queue env thread-idx)])
     (if (equal? (queue-length thread-queue) 0)
       (let ([highest-idx (get-max-dp-q-idx env)])
-        (if (equal? (queue-length (get-dp-queue highest-idx)) 0) 
+        (if (equal? (queue-length (get-dp-queue env highest-idx)) 0) 
           (thread-suspend (current-thread))
-          (highest-idx)))
-      (thread-idx))))
+          highest-idx))
+      thread-idx)))
 
 
 ;; Return a task from a thread queue to execute
@@ -547,12 +547,21 @@
 ;; that coroutine does not (yield) intelligently this may have no effect.
 ;; Returns: #t if task completed, #f if task not yet completed
 (define (dp-thread-exec-task env thread-idx task evals-left)
+  (printf "11111\n")
   (let ([ret (task)])
+    (printf "22222\n")
     (if (task 'dead?) ;check if coroutine is dead
-      #t ;task completed
+      (let ()
+        (printf "33333\n")
+        #t ;task completed
+      )
       (if (> evals-left 0)
-        (dp-thread-exec-task env thread-idx (- evals-left 1))
         (let ()
+        (printf "44444\n")
+        (dp-thread-exec-task env thread-idx task (- evals-left 1))
+        )
+        (let ()
+          (printf "55555\n")
           (go env task) ;place task at the back of a queue
           #f))))) ;task not yet completed
 
@@ -568,7 +577,7 @@
         thread-idx 
         (get-task env thread-idx) 
         (get-dp-thread-continuous-eval-limit env))))
-  (dp-thread thread-idx))
+  (dp-thread env thread-idx))
 
 
 ;; Thread startup coroutinetion
@@ -1062,7 +1071,7 @@
 
 
   ;;**************************************
-  ;;TEST get-datapool-channel 
+  ;;TEST get-datapool-input-channel 
   ;;     get-num-dp-threads 
   ;;     get-dp-thread 
   ;;     get-dp-queue 
@@ -1081,8 +1090,8 @@
          [env (make-dp-data num-threads eval-limit)])
 
     ;verify that parent->dp channel exists
-    (test-true? "get-datapool-channel verify that parent->dp channel exists" (async-channel? 
-                                                                               (get-datapool-channel env)) print-result wait)
+    (test-true? "get-datapool-input-channel verify that parent->dp channel exists" (async-channel? 
+                                                                                     (get-datapool-input-channel env)) print-result wait)
 
     ;verify correct num of threads exist 
     (test-equal? "get-num-dp-threads verify correct num of threads exist" (get-num-dp-threads env) 2 print-result wait)
@@ -1261,28 +1270,39 @@
   ;;**************************************
 
   ;;**************************************
-  ;;TEST get-dp-parent-channel
+  ;;TEST get-datapool-output-channel
   ;;     get-dp-parent-ch-sem
-  ;;     send-to-datapool-parent 
+  ;;     send-to-datapool-output-channel 
   ;;--------------------------------------
   (TEST-SECTION "datapool channel functions")
   (let* ([num-threads 2]
          [eval-limit 10]
          [env (make-dp-data num-threads eval-limit)])
-    (test-equal? "get-dp-parent-channel" (channel? (get-dp-parent-channel env)) print-result wait)
-    (test-equal? "get-dp-parent-ch-sem" (semaphore? (get-dp-parent-ch-sem env)) print-result wait)
+    (test-true? "get-datapool-output-channel" (async-channel? (get-datapool-output-channel env)) print-result wait)
+    (test-true? "get-dp-parent-ch-sem" (semaphore? (get-dp-parent-ch-sem env)) print-result wait)
 
-    (ch-put (get-dp-parent-channel) #t)
-    (test-true? "" (ch-get (get-dp-parent-channel env)) print-result wait)
+    (ch-put (get-datapool-output-channel env) #t)
 
-    (ch-put (get-dp-parent-channel) "test-string" print-result wait)
-    (test-equal? "" (ch-get (get-dp-parent-channel env)) "test-string" print-result wait)
+    (test-true? "get data from channel" (ch-get (get-datapool-output-channel env)) print-result wait)
 
-    (send-to-datapool-parent #t)
-    (test-true? "" (ch-get (get-dp-parent-channel env)) print-result wait)
+    (ch-put (get-datapool-output-channel env) "test-string")
 
-    (send-to-datapool-parent "test-string2")
-    (test-equal? "" (ch-get (get-dp-parent-channel env)) "test-string2" print-result wait))
+    (test-equal? "get string from channel" (ch-get (get-datapool-output-channel env)) "test-string" print-result wait)
+
+    (send-to-datapool-output-channel env #t)
+
+    (test-true? "get-datapool-input-channel" (async-channel? (get-datapool-input-channel env)) print-result wait)
+    (test-true? "(and send-to-datapool-output-channel get-datapool-input-channel) with a boolean" 
+                (ch-get (get-datapool-output-channel env)) 
+                print-result 
+                wait)
+
+    (send-to-datapool-output-channel env "test-string2")
+    (test-equal? "(and send-to-datapool-output-channel get-datapool-input-channel) with a test string" 
+                 (ch-get (get-datapool-output-channel env)) 
+                 "test-string2" 
+                 print-result 
+                 wait))
   ;;**************************************
 
   ;;**************************************
@@ -1291,48 +1311,60 @@
   ;;     dp-thread-exec-task
   ;;     dp-thread
   ;;     dp-thread-start
-  ;;     go
+  ;;     go ;from within datapool
   ;;     go ;from parent
   ;;--------------------------------------
   (TEST-SECTION "datapool thread internal functions")
   (let* ([num-threads 2]
          [eval-limit 10]
          [env (make-dp-data num-threads eval-limit)])
-    (test-equal? "" (get-task-q-idx env 0) 0 print-result wait)
-    (test-equal? "" (get-task-q-idx env 1) 1 print-result wait)
+    (coroutine (test-task-co)
+               1)
+    (define test-task (test-task-co))
 
-    (define (test-task) #t)
+    (enqueue! (get-dp-queue env 0) test-task)
+
+    (test-equal? "get-task-q-idx" (get-task-q-idx env 0) 0 print-result wait)
+
+    (dequeue! (get-dp-queue env 0))
     (enqueue! (get-dp-queue env 1) test-task)
 
-    (test-equal? "" (get-task-q-idx env 0) 1 print-result wait)
-    (test-equal? "" (get-task-q-idx env 1) 1 print-result wait)
+    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 1 print-result wait)
+    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 print-result wait)
+
+    (enqueue! (get-dp-queue env 1) test-task)
+
+    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 1 print-result wait)
+    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 print-result wait)
 
     (enqueue! (get-dp-queue env 0) test-task)
 
-    (test-equal? "" (get-task-q-idx env 0) 0 print-result wait)
-    (test-equal? "" (get-task-q-idx env 1) 1 print-result wait)
-
-    (enqueue! (get-dp-queue env 0) test-task)
-
-    (test-equal? "" (get-task-q-idx env 0) 0 print-result wait)
-    (test-equal? "" (get-task-q-idx env 1) 0 print-result wait)
+    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 0 print-result wait)
+    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 print-result wait)
 
     (let ([len-0 (queue-length (get-dp-queue env 0))]
           [task (get-task env 0)])
-      (test-true? "" (> len-0 (queue-length (get-dp-queue env))) print-result wait)
+      (test-true? "get-task" (> len-0 (queue-length (get-dp-queue env 0))) print-result wait))
 
-      (test-true? "" (dp-thread-exec-task env 0 task 10) print-result wait)
+    (define t-thread
+      (thread 
+        (thunk 
 
-      ;coroutine coroutine that evaluates infinitely
-      (coroutine 
-        (eval-infinity) 
-        (eval-infinity))
+          ;coroutine coroutine that evaluates infinitely
+          (coroutine 
+            (eval-infinity) 
+            (yield 1)
+            (eval-infinity))
 
-      ;Should evaluate 10 times then return #f
-      (test-true? "" (not (dp-thread-exec-task env 0 eval-infinity 10)) print-result wait))
+          ;Should evaluate 10 times then return #f
+          (test-true? "dp-thread-exec-task" (not (dp-thread-exec-task env 0 (eval-infinity) 10)) print-result wait))))
+
+    (sleep 0.1)
+    (test-true? "verify test thread is not dead" (not (thread-dead? t-thread)) print-result wait)
+    (test-true? "verify test thread is not running" (not (thread-running? t-thread)) print-result wait)
 
     ;Don't need to sleep as the current thread is actually running this coroutine
-    (dp-thread 1)
+    (dp-thread env 1)
     (test-true? "" (not (thread-dead? (get-dp-thread env 1))) print-result wait)
     (test-true? "" (not (thread-running? (get-dp-thread env 1))) print-result wait)
     (test-true? "" (thread-running? (current-thread)) print-result wait)
@@ -1375,14 +1407,13 @@
     (define dp (datapool 2))
 
     (coroutine (main env) 
-               (let ([parent (get-dp-parent-channel env)])
+               (let ([parent (get-datapool-output-channel env)])
                  (ch-put parent "test string")))
 
-    (define co1 (main dp))
-    (go dp co1)
+    (go dp (main dp))
     (sleep 0.1)
 
-    (test-equal? "" (ch-get (get-datapool-channel dp)) "test string" print-result wait)
+    (test-equal? "" (ch-get (get-datapool-input-channel dp)) "test string" print-result wait)
     (close-dp dp))
   ;;**************************************
 
@@ -1434,7 +1465,7 @@
   ;;;---------------------------------------------------------------------------- 
   ;TODO figure out how to get argv & argc 
   ;(define dp1 (datapool 4 '(main argv argc)))
-  ;(let ([ch (get-datapool-channel dp1)]) 
+  ;(let ([ch (get-datapool-input-channel dp1)]) 
   ;(ch-get ch))
 
 
