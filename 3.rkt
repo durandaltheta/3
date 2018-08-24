@@ -236,7 +236,7 @@
 ;;; Datapool Data functions
 ;;;--------------------------------------------------------------------------
 ;;create datapool data 
-(define (make-datapool num-threads eval-limit) 
+(define (make-datapool num-threads) 
   (let* ([key-src 0]
          [ret
            (box 
@@ -914,7 +914,7 @@
   ;Make a datapool
   (let* ([num-threads 2]
          [eval-limit 10]
-         [env (make-datapool num-threads eval-limit)])
+         [env (make-datapool num-threads)])
 
     ;Verify threads exist
     (for ([i num-threads])
@@ -1016,7 +1016,7 @@
   (TEST-SECTION "datapool getters & setters")
   (let* ([num-threads 2]
          [eval-limit 10]
-         [env (make-datapool num-threads eval-limit)])
+         [env (make-datapool num-threads)])
 
     ;verify that parent->dp channel exists
     (test-true? "get-datapool-input-channel verify that parent->dp channel exists" (async-channel? 
@@ -1069,7 +1069,7 @@
   (TEST-SECTION "task queue getters & setters")
   (let* ([num-threads 2]
          [eval-limit 10]
-         [env (make-datapool num-threads eval-limit)])
+         [env (make-datapool num-threads)])
 
     ;;Arbitrary coroutinetion to execute
     (define (test-task) #t)
@@ -1117,7 +1117,7 @@
   (TEST-SECTION "manage data objects")
   (let* ([num-threads 2]
          [eval-limit 10]
-         [env (make-datapool num-threads eval-limit)])
+         [env (make-datapool num-threads)])
 
     (define test-class%
       (class object% (super-new)
@@ -1147,7 +1147,7 @@
   (TEST-SECTION "manage message handlers")
   (let* ([num-threads 2]
          [eval-limit 10]
-         [env (make-datapool num-threads eval-limit)])
+         [env (make-datapool num-threads)])
     (test-true? "get-dp-message-handlers" (hash? (get-dp-message-handlers env)) print-result wait)
     (test-true? "get-dp-message-handlers-sem" (semaphore? (get-dp-message-handlers-sem env)) print-result wait)
 
@@ -1204,7 +1204,7 @@
   (TEST-SECTION "datapool channel functions")
   (let* ([num-threads 2]
          [eval-limit 10]
-         [env (make-datapool num-threads eval-limit)])
+         [env (make-datapool num-threads)])
     (test-true? "get-datapool-output-channel" (async-channel? (get-datapool-output-channel env)) print-result wait)
     (test-true? "get-dp-parent-ch-sem" (semaphore? (get-dp-parent-ch-sem env)) print-result wait)
 
@@ -1245,7 +1245,7 @@
   (TEST-SECTION "datapool thread internal functions")
   (let* ([num-threads 2]
          [eval-limit 10]
-         [env (make-datapool num-threads eval-limit)])
+         [env (make-datapool num-threads)])
     (define-coroutine (test-task-co)
                       3)
     (define test-task (test-task-co))
@@ -1350,7 +1350,59 @@
   (TEST-SECTION "go stress test")
   (let* ([num-threads 8]
          [eval-limit 10]
-         [env (make-datapool num-threads eval-limit)])
+         [env (make-datapool num-threads)])
+
+    (define-coroutine
+      (test-ro inp-x)
+      (define (inner x)
+        (if (equal? x 0)
+            #t
+            (inner (- x 1))))
+      (inner inp-x))
+
+    (define (wait-len env)
+      (define idxs (list))
+
+      (for ([i num-threads])
+           (set! idxs (append idxs (list i))))
+
+      (let ([lens (map (lambda (idx) (queue-length (get-dp-queue env idx))) idxs)]
+            [done #t])
+        (for-each 
+          (lambda (len) 
+            (when (> len 0) (set! done #f)))
+          lens)
+        (when (not done)
+          (let ()
+            (sleep 0.05)
+            (wait-len env)))))
+
+    (let ([start-time (current-inexact-milliseconds)]
+          [v 1000])
+      (for ([i v])
+           (for ([x i]) 
+                (go env (test-ro x)))
+
+           (when (equal? (remainder i 100) 0)
+             (printf "\tfinished i: ~a\n" i)))
+
+      (wait-len env)
+      (for ([i num-threads])
+           (let ([o (open-output-string)])
+             (fprintf o "length q[~a]" i)
+             (test-equal? (get-output-string o) (queue-length (get-dp-queue env i)) 0 print-result wait)))
+      (printf "Benchmark time (milli) for ~a (go) in ~a threads, with no yields or returns: ~a\n"  (* v v) num-threads (- (current-inexact-milliseconds) start-time)))
+
+    (close-dp env))
+  ;;--------------------------------------
+
+  ;;**************************************
+  ;;TEST go ;stress test 2
+  ;;--------------------------------------
+  (TEST-SECTION "go stress test 2")
+  (let* ([num-threads 8]
+         [eval-limit 10]
+         [env (make-datapool num-threads)])
 
     (sleep 0.1)
 
