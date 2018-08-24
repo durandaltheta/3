@@ -1362,19 +1362,20 @@
     (test-true? "Check if dp thread is not running" (not (thread-running? (get-dp-thread env 0))) print-result wait)
     (test-true? "Check if dp thread is not running" (not (thread-running? (get-dp-thread env 1))) print-result wait)
 
-    (define-coroutine 
-      (eval-x-times env inp-x)
-      (define (in-loop x)
-        (if (equal? x 0)
-            (ch-put (get-datapool-output-channel env) inp-x)
-            (let ()
-              ;(yield x)
-              (in-loop (- x 1)))))
-      (in-loop inp-x))
-
     (let ([x 200]
           [x2 10]
-          [inner-x 10000])
+          [inner-x 1000000]) ;1,000,000
+      (define-coroutine 
+        (eval-x-times env inp-x [yield #f])
+        (define (in-loop x)
+          (if (equal? x 0)
+              #t
+              (let ()
+                (when yield (yield x))
+                (in-loop (- x 1)))))
+        (in-loop inp-x)
+        (ch-put (get-datapool-output-channel env) inp-x))
+
       (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
       (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
 
@@ -1387,53 +1388,113 @@
 
       (go env (eval-x-times env x))
 
-      (sleep 1.0)
+      (sleep 0.1)
 
       (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
       (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
+      ;------------------------------------------------------------------------
 
-      (for ([i x])
-           (go env (eval-x-times env x)))
+      (sleep 0.1)
 
       (let ([start-time (current-inexact-milliseconds)])
         (for ([i x])
+             (go env (eval-x-times env x)))
+        (for ([i x])
              (ch-get (get-datapool-output-channel env)))
-        (printf "Benchmark time (milli) for ~a evaluations on ~a threads: ~a\n" (* x x) num-threads (- (current-inexact-milliseconds) start-time)))
+        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with (when yield) checks: ~a\n"  x x num-threads (- (current-inexact-milliseconds) start-time)))
 
       (sleep 0.1)
 
       (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
       (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
+      ;------------------------------------------------------------------------
 
-      (define-coroutine
-        (eval-x-times-parallel env inp-x)
-        (let ([quarter-x (/ inp-x 4)]
-              [ch-sem (make-fsemaphore 1)])
-          (define (in-loop x start-x end-x)
-            (if (equal? x end-x)
-                (let ()
-                  (fsemaphore-wait ch-sem)
-                  (ch-put (get-datapool-output-channel env) start-x)
-                  (fsemaphore-post ch-sem))
-                (in-loop (- x 1) start-x end-x)))
-          (let ([f (future (thunk (in-loop inp-x inp-x quarter-x)))])
-            (in-loop quarter-x quarter-x 0)
-            (touch f))))
+      (sleep 0.1)
 
       (let ([start-time (current-inexact-milliseconds)])
+        (for ([i x])
+             (go env (eval-x-times env x #t)))
+        (for ([i x])
+             (ch-get (get-datapool-output-channel env)))
+        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with yield on each loop: ~a\n"  x x num-threads (- (current-inexact-milliseconds) start-time)))
 
-        (let ([start-time (current-inexact-milliseconds)])
-          (for ([i 4])
-               (go env (eval-x-times-parallel env inner-x)))
+      (sleep 0.1)
 
-          (for ([i 4])
-               (ch-get (get-datapool-output-channel env)))
-          (printf "Benchmark time (milli) for ~a evaluations on ~a threads and ~a parallel futures: ~a\n" (* 4 inner-x) num-threads 4 (- (current-inexact-milliseconds) start-time))))
+      (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
+      (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
+      ;------------------------------------------------------------------------ 
+
+      (sleep 0.1)
+
+
+      ;no yield
+      (define-coroutine 
+        (eval-x-times-no-yield env inp-x)
+        (define (in-loop x)
+          (if (equal? x 0)
+              #t
+              (in-loop (- x 1))))
+        (in-loop inp-x)
+        (ch-put (get-datapool-output-channel env) inp-x))
+
+
+      ;parallel processing with futures
+      (define-coroutine
+        (eval-x-times-parallel env inp-x)
+        (define (in-loop ch x)
+          (if (equal? x 0)
+              (ch-put ch #t)
+              (in-loop ch (- x 1))))
+        (let* ([ch (channel)]
+               [f (future (thunk (in-loop ch inp-x)))])
+          (ch-get ch)
+          (touch f)
+          (ch-put (get-datapool-output-channel env) inp-x)))
+
+
+      (let ([start-time (current-inexact-milliseconds)])
+        (for ([i x])
+             (go env (eval-x-times-no-yield env x)))
+        (for ([i x])
+             (ch-get (get-datapool-output-channel env)))
+        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads in coroutine without yield calls: ~a\n"  x x num-threads (- (current-inexact-milliseconds) start-time)))
+
+      (sleep 0.1)
+
+      (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
+      (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
+      ;------------------------------------------------------------------------ 
+
+      (sleep 0.1)
+
+      (let ([start-time (current-inexact-milliseconds)])
+        (for ([i 8])
+             (go env (eval-x-times-no-yield env inner-x)))
+        (for ([i 8])
+             (ch-get (get-datapool-output-channel env)))
+        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads in coroutine without yield calls: ~a\n"  8 inner-x num-threads (- (current-inexact-milliseconds) start-time)))
+
+      (sleep 0.1)
+
+      (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
+      (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
+      ;------------------------------------------------------------------------ 
+
+      (sleep 0.1)
+
+      (let ([start-time (current-inexact-milliseconds)])
+        (for ([i 8])
+             (go env (eval-x-times-parallel env inner-x)))
+
+        (for ([i 8])
+             (ch-get (get-datapool-output-channel env)))
+        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads and ~a parallel futures: ~a\n"  8 inner-x num-threads 8 (- (current-inexact-milliseconds) start-time)))
 
       (sleep 0.1)
 
       (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
       (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait))
+    ;------------------------------------------------------------------------ 
 
     (close-dp env))
   ;;**************************************
