@@ -1516,7 +1516,7 @@
       (let ([start-time (current-inexact-milliseconds)])
         (for ([i x])
              (ch-get (get-datapool-output-channel env)))
-        (printf "Benchmark time (milli) for ~a evaluations: ~a\n" (* x x) (- (current-inexact-milliseconds) start-time)))
+        (printf "Benchmark time (milli) for ~a evaluations on ~a threads: ~a\n" (* x x) num-threads (- (current-inexact-milliseconds) start-time)))
 
       (sleep 0.1)
 
