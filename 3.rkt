@@ -1487,7 +1487,7 @@
         (if (equal? x 0)
           (ch-put (get-datapool-output-channel env) inp-x)
           (let ()
-            (yield x)
+            ;(yield x)
             (in-loop (- x 1)))))
       (in-loop inp-x))
 
