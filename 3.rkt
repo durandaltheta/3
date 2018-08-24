@@ -301,32 +301,32 @@
 ;;;--------------------------------------------------------------------------
 ;;create datapool data 
 (define (make-dp-data num-threads eval-limit) 
-  (let ([ret (box #f)]
-        [key-src 0])
-    (set-box! ret 
-              (vector 
-                ;thread id's, queues, and semaphores
-                (make-vector ;thread and task queue vector
-                  num-threads 
-                  ;(vector 
-                  ;  (thread (thunk (dp-thread-start ret))) ;threads
-                  ;  (make-queue) ;thread task queues
-                  ;  (make-semaphore 1))) ;thread task queue semaphores 
-                  )
-                (vector ;message handler vector
-                  (make-hash) ;hash table of data objects
-                  (make-hash) ;hash table of lists of message handlers
-                  (make-semaphore 1) ;data hash semaphore
-                  (make-semaphore 1)) ;message handlers semaphore
-                (vector ;datapool channel vector
-                  (channel #f) ;parent->tdatapool channel
-                  (channel #f) ;datapool->parent channel
-                  (make-semaphore 1)) ;datapool->parent channel semaphore 
-                (vector ;data object vector
-                  key-src ;data-obj-key-src
-                  (make-queue)) ;data-obj-free-key-q 
-                (vector ;evaluation rules vector
-                  eval-limit)))
+  (let* ([key-src 0]
+         [ret
+           (box 
+             (vector 
+               ;thread id's, queues, and semaphores
+               (make-vector ;thread and task queue vector
+                 num-threads 
+                 ;(vector 
+                 ;  (thread (thunk (dp-thread-start ret))) ;threads
+                 ;  (make-queue) ;thread task queues
+                 ;  (make-semaphore 1))) ;thread task queue semaphores 
+                 )
+               (vector ;message handler vector
+                 (make-hash) ;hash table of data objects
+                 (make-hash) ;hash table of lists of message handlers
+                 (make-semaphore 1) ;data hash semaphore
+                 (make-semaphore 1)) ;message handlers semaphore
+               (vector ;datapool channel vector
+                 (channel #f) ;parent->tdatapool channel
+                 (channel #f) ;datapool->parent channel
+                 (make-semaphore 1)) ;datapool->parent channel semaphore 
+               (vector ;data object vector
+                 key-src ;data-obj-key-src
+                 (make-queue)) ;data-obj-free-key-q 
+               (vector ;evaluation rules vector
+                 eval-limit)))])
     (for ([i num-threads])
          (let ()
            (vector-set! 
@@ -556,24 +556,24 @@
 ;; that coroutine does not (yield) intelligently this may have no effect.
 ;; Returns: #t if task completed, #f if task not yet completed
 (define (dp-thread-exec-task env thread-idx task evals-left)
-  ;(printf "exec-task 0\n")
+  ;(printf "exec-task thread-idx: ~a\n" thread-idx)
   (let ([ret (task)])
-  ;  (printf "exec-task 1, ret: ~a\n" ret)
-  ;  (read-line (current-input-port) 'any)
+    ;  (printf "exec-task 1, ret: ~a\n" ret)
+    ;  (read-line (current-input-port) 'any)
     (if (task 'dead?) ;check if coroutine is dead 
       (let ()
-  ;      (printf "exec-task 2\n")
+        ;      (printf "exec-task 2\n")
         #t ;task completed 
         )
       (let ()
-  ;      (printf "exec-task 3\n")
+        ;      (printf "exec-task 3\n")
         (if (> evals-left 0)
           (let ()
-  ;          (printf "exec-task 4\n")
+            ;          (printf "exec-task 4\n")
             (dp-thread-exec-task env thread-idx task (- evals-left 1))
             )
           (let ()
-  ;          (printf "exec-task 5\n")
+            ;          (printf "exec-task 5\n")
             (go env task) ;place task at the back of a queue
             #f)) ;task not yet completed  
         ))))
@@ -583,20 +583,20 @@
 (define (dp-thread env thread-idx) 
   ;(printf "dp-thread 0\n")
   (let ([task (get-task env thread-idx)])
-  ;  (printf "dp-thread 1\n")
+    ;  (printf "dp-thread 1\n")
     (if (equal? task #f)
       (let ()
-  ;      (printf "dp-thread 2\n")
+        ;      (printf "dp-thread 2\n")
         (thread-suspend (current-thread))
-      )
+        )
       (let ()
-  ;      (printf "dp-thread 3\n")
-      (dp-thread-exec-task ;execute the task we get
-        env 
-        thread-idx 
-        task
-        (get-dp-thread-continuous-eval-limit env))
-      )))
+        ;      (printf "dp-thread 3\n")
+        (dp-thread-exec-task ;execute the task we get
+          env 
+          thread-idx 
+          task
+          (get-dp-thread-continuous-eval-limit env))
+        )))
   ;(printf "dp-thread 4\n")
   (dp-thread env thread-idx))
 
@@ -1467,9 +1467,11 @@
   ;;TEST go ;stress test
   ;;--------------------------------------
   (TEST-SECTION "go stress test")
-  (let* ([num-threads 2]
+  (let* ([num-threads 8]
          [eval-limit 10]
          [env (make-dp-data num-threads eval-limit)])
+
+    (sleep 0.1)
 
     ;verify threads exist 
     (test-true? "get-dp-thread verify threads exist 1" (thread? (get-dp-thread env 0)) print-result wait)
@@ -1480,10 +1482,10 @@
     (test-true? "Check if dp thread is not running" (not (thread-running? (get-dp-thread env 1))) print-result wait)
 
     (define-coroutine 
-      (eval-x-times inp-x)
+      (eval-x-times env inp-x)
       (define (in-loop x)
         (if (equal? x 0)
-          0
+          (ch-put (get-datapool-output-channel env) inp-x)
           (let ()
             (yield x)
             (in-loop (- x 1)))))
@@ -1495,13 +1497,13 @@
       (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
 
       (for ([i x2])
-           (enqueue! (get-dp-queue env 0) (eval-x-times i))
-           (enqueue! (get-dp-queue env 1) (eval-x-times i)))
+           (enqueue! (get-dp-queue env 0) (eval-x-times env i))
+           (enqueue! (get-dp-queue env 1) (eval-x-times env i)))
 
       (test-equal? "" (queue-length (get-dp-queue env 0)) x2 print-result wait)
       (test-equal? "" (queue-length (get-dp-queue env 1)) x2 print-result wait)
 
-      (go env (eval-x-times x))
+      (go env (eval-x-times env x))
 
       (sleep 1.0)
 
@@ -1509,9 +1511,14 @@
       (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait)
 
       (for ([i x])
-           (go env (eval-x-times x)))
+           (go env (eval-x-times env x)))
 
-      (sleep 1.0)
+      (let ([start-time (current-inexact-milliseconds)])
+        (for ([i x])
+             (ch-get (get-datapool-output-channel env)))
+        (printf "Benchmark time (milli) for ~a evaluations: ~a\n" (* x x) (- (current-inexact-milliseconds) start-time)))
+
+      (sleep 0.1)
 
       (test-equal? "" (queue-length (get-dp-queue env 0)) 0 print-result wait)
       (test-equal? "" (queue-length (get-dp-queue env 1)) 0 print-result wait))
