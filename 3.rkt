@@ -5,25 +5,28 @@
          racket/place
          data/queue)
 
+;;;;Data wants to be structured and stateful 
+;;;;Functions want to be functional and stateless
+;;;;Computation wants to be asynchronous and seamless
+
 (provide 
   ;;;DATAPOOL
   make-datapool ;start a datapool
-  close-dp ;kill all threads in the datapool 
+  close-dp ;kill all threads and processes in the datapool 
 
   ;;;COMMUNICATION
-  channel ;create an asynchronous channel for thread communication
+  channel ;create an asynchronous channel for inter-thread communication
   ch-get ;get from a channel
   ch-put ;send into a channel
-  get-datapool-input-channel ;get the channel to send messages into the 
-  ;datapool environment
+  get-datapool-input-channel ;get the channel to send messages into the datapool environment
   get-datapool-output ;retrieve data from datapool output channel
   send-to-datapool-output-channel ;send data to the datapool's parent scope 
 
-  ;;;TASK EXECUTION
+  ;;;COMPUTATION
   define-coroutine ;return a coroutine procedure. When invoked produces 
   ;a suspended coroutine for use in (go)
   go ;place a coroutine in a queue to be executed by a thread 
-  go-proc ;send a quoted form to be evaluated by another processes
+  go-proc ;send a quoted form to be evaluated by another process
 
   ;;;DATA
   register-data! ;register given object in the datapool 
@@ -33,7 +36,7 @@
   set-data-field! ;set a registered object's field via its key 
 
   ;;;MESSAGING
-  message ;create a message object with a given type and arguments
+  message ;create a message object with a given type and content payload
   message-type ;return a message's type
   message-content ;return a message's payload
   register-message-handler
@@ -51,7 +54,7 @@
 
 
 ;;;----------------------------------------------------------------------------
-;;; Test functions 
+;;; TESTING - functions
 ;;;---------------------------------------------------------------------------- 
 ;; To wait for user input on test failure 
 ;; (define *run-3-tests-wait-before-cont* #t) 
@@ -196,7 +199,7 @@
 
 
 ;;;----------------------------------------------------------------------------
-;;; Coroutines
+;;; COMPUTATION - coroutines
 ;;;----------------------------------------------------------------------------  
 ;; Coroutine definition  
 (define (make-generator procedure)
@@ -239,8 +242,9 @@
                         . body))))))
 
 
+
 ;;;----------------------------------------------------------------------------
-;;;basic channel functions
+;;; COMMUNICATION - channels
 ;;;---------------------------------------------------------------------------- 
 ;;create an async channel, no size limit by default
 (define (channel [size #f]) (make-async-channel size))
@@ -264,7 +268,7 @@
 
 
 ;;;--------------------------------------------------------------------------
-;;; Datapool Data functions
+;;; DATAPOOL
 ;;;--------------------------------------------------------------------------
 ;;create datapool data 
 (define (make-datapool num-threads num-processes) 
@@ -323,25 +327,25 @@
     ret)) ;return a 'by reference' symbol
 
 
-;; Return the datapool's data
+;; Return the datapool's environment data
 (define (unbox-dp-env env)
   (unbox env))
-
 
 ;; Return number of threads in the datapool
 (define (get-num-dp-threads env) 
   (vector-length (vector-ref (unbox-dp-env env) 1)))
 
 ;; Return number of threads in the datapool
-(define (get-num-dp-process-threads env) 
+(define (get-num-dp-proc-threads env) 
   (vector-length (vector-ref (unbox-dp-env env) 2)))
 
 ;; Get the place channel for specified process index. Things put in the channel 
 ;; are visible to the associated process within its personal process-channel
 (define (get-process-channel env proc-num)
-  (car (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) i) 0)))
+  (car (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) proc-num) 0)))
 
-;;kill all threads in a datapool
+;; PUBLIC API
+;;kill all threads and processes in a datapool
 (define (close-dp env)
   ;kill threads
   (for ([i (vector-length (vector-ref (unbox-dp-env env) 1))])
@@ -354,64 +358,46 @@
 
 ;; Get the communication parent->datapool channel
 (define (get-datapool-input-channel env) 
-  (vector-ref (vector-ref (unbox-dp-env env) 2) 0))
+  (vector-ref (vector-ref (unbox-dp-env env) 0) 0))
+
+;; PUBLIC API
+;; Get the datapool->parent channel
+(define (get-datapool-output env [block #f]) 
+  (ch-get (vector-ref (vector-ref (unbox-dp-env env) 0) 1) block))
+
+
+;; Get the semaphore for the parent->dp channel
+(define (get-dp-parent-ch-sem env)
+  (vector-ref (vector-ref (unbox-dp-env env) 0) 2))
+
+
+;; PUBLIC API
+;; Send info from the datapool to the parent
+(define (send-to-datapool-output-channel env form)
+  (semaphore-wait (get-dp-parent-ch-sem env))
+  (ch-put (get-datapool-output-channel env) form)
+  (semaphore-post (get-dp-parent-ch-sem env)))
+
+
 
 
 ;;;--------------------------------------------------------------------------
-;;; Start private datapool thread coroutinetion defines
+;;; COMPUTATION - thread management
 ;;;-------------------------------------------------------------------------- 
+;;;threads
 ;; Get a thread pid at provided index
 (define (get-dp-thread env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 0) idx) 0))
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) idx) 0))
 
 
 ;; Get a thread task queue at provided index
 (define (get-dp-queue env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 0) idx) 1))
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) idx) 1))
 
 
 ;; Get a thread task queue semaphore at provided index
 (define (get-dp-queue-sem env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 0) idx) 2))
-
-
-;; Get the hash of data objects
-(define (get-data-hash env)
-  (vector-ref (vector-ref (unbox-dp-env env) 1) 0))
-
-
-;; Get the data objects semaphore
-(define (get-data-sem env)
-  (vector-ref (vector-ref (unbox-dp-env env) 1) 2))  
-
-
-;; Get the data object current new key source integer
-(define (get-data-key-src env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 0)) 
-
-
-;; Set the data object current new key source integer
-(define (set-data-key-src env val)
-  (vector-set! (vector-ref (unbox-dp-env env) 3) 0 val)) 
-
-
-;; Get the queue of freed data keys
-(define (get-data-free-key-q env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 1))
-
-
-;; Add a recycled data object key to the container queue
-(define (add-free-dp-data-key env key) 
-  (enqueue! (get-data-free-key-q env) key))
-
-
-;; Generate a new data object hash key
-(define (gen-dp-data-obj-key env) 
-  (if (> (queue-length (get-data-free-key-q env)) 0) 
-      (dequeue! (get-data-free-key-q env))
-      (let ([ret (get-data-key-src env)])
-        (set-data-key-src env (+ (get-data-key-src env) 1)) 
-        ret)))
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) idx) 2))
 
 
 ;; Get the index of the fullest thread task queue
@@ -453,14 +439,104 @@
     #t))
 
 
-;;Enqueues quoted formj
+
+;;;processes (places)
+;; Get a thread pid at provided index
+(define (get-dp-proc-thread env idx)
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 0))
+
+
+;; Get a thread pid at provided index
+(define (get-dp-proc env idx)
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 1))
+
+
+;; Get a thread task queue at provided index
+(define (get-dp-proc-queue env idx)
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 2))
+
+
+;; Get a thread task queue semaphore at provided index
+(define (get-dp-proc-queue-sem env idx)
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 3) idx) 3))
+
+
+;; Get the index of the fullest thread task queue
+(define (get-max-dp-proc-q-idx env)
+  (define longest (cons (queue-length (get-dp-proc-queue env 0)) 0))
+  (when (> (get-num-dp-proc-threads env) 1)
+    (for ([i (in-range 1 (get-num-dp-proc-threads env))])
+         (let ([cur-q-len (queue-length (get-dp-proc-queue env i))])
+           (when (< (car longest) cur-q-len)
+             (begin
+               (set! longest (cons cur-q-len i)))))))
+  (cdr longest))
+
+
+;; Get the index of the emptiest thread task queue
+(define (get-min-dp-proc-q-idx env)
+  (define shortest (cons (queue-length (get-dp-proc-queue env 0)) 0))
+  (when (> (get-num-dp-proc-threads env) 1)
+    (for ([i (in-range 1 (get-num-dp-proc-threads env))])
+         (let ([cur-q-len (queue-length (get-dp-proc-queue env i))])
+           (when (> (car shortest) cur-q-len)
+             (begin
+               (set! shortest (cons cur-q-len i)))))))
+  (cdr shortest))
+
+
+;;Enqueues quoted form
 (define (go-proc env quoted-form [ret-key #f] [ret-field #f])
-  (let ([q-idx (get-min-dp-q-idx env)])
-    (semaphore-wait (get-dp-queue-sem env q-idx))
+  (let ([q-idx (get-min-dp-proc-q-idx env)])
+    (semaphore-wait (get-dp-proc-queue-sem env q-idx))
     (enqueue! (get-dp-proc-queue env q-idx) (list quoted-form ret-key ret-field))
-    (semaphore-post (get-dp-queue-sem env q-idx))
+    (semaphore-post (get-dp-proc-queue-sem env q-idx))
     (thread-resume (get-dp-thread env q-idx))
     #t))
+
+
+
+
+;;;--------------------------------------------------------------------------
+;;; DATA
+;;;-------------------------------------------------------------------------- 
+;; Get the hash of data objects
+(define (get-data-hash env)
+  (vector-ref (vector-ref (unbox-dp-env env) 4) 0))
+
+
+;; Get the data objects semaphore
+(define (get-data-sem env)
+  (vector-ref (vector-ref (unbox-dp-env env) 4) 1))  
+
+
+;; Get the data object current new key source integer
+(define (get-data-key-src env)
+  (vector-ref (vector-ref (unbox-dp-env env) 4) 2)) 
+
+
+;; Set the data object current new key source integer
+(define (set-data-key-src env val)
+  (vector-set! (vector-ref (unbox-dp-env env) 4) 2 val)) 
+
+
+;; Get the queue of freed data keys
+(define (get-data-free-key-q env)
+  (vector-ref (vector-ref (unbox-dp-env env) 4) 3))
+
+
+;; Add a recycled data object key to the container queue
+(define (add-free-dp-data-key env key) 
+  (enqueue! (get-data-free-key-q env) key))
+
+
+;; Generate a new data object hash key
+(define (gen-dp-data-obj-key env) 
+  (if (> (queue-length (get-data-free-key-q env)) 0) 
+      (dequeue! (get-data-free-key-q env))
+      (let ([ret (get-data-key-src env)])
+        (set-data-key-src env (+ (get-data-key-src env) 1)) 
+        ret)))
 
 
 ;; Get a data object reference from the hash
@@ -491,7 +567,7 @@
     (if data 
         (let ()
           (semaphore-wait (get-data-sem env))
-          (send field (get-data-intern env key) val)
+          (set-field! field (get-data-intern env key) val)
           (semaphore-post (get-data-sem env))
           #t)
         #f)))
@@ -507,7 +583,7 @@
         #t)
       (let ()
         (semaphore-post (get-data-sem env))
-        #f)))
+        #f))) 
 
 
 ;; PUBLIC API
@@ -517,14 +593,19 @@
     (hash-data! env key data)))
 
 
+
+
+;;;--------------------------------------------------------------------------
+;;; COMMUNICATION - message management
+;;;--------------------------------------------------------------------------
 ;; Get the hash of message callback handlers
 (define (get-dp-message-handler-hash env)
-  (vector-ref (vector-ref (unbox-dp-env env) 1) 1))
+  (vector-ref (vector-ref (unbox-dp-env env) 3) 0))
 
 
 ;; Get the message callback handlers semaphore
 (define (get-dp-message-handler-hash-sem env)
-  (vector-ref (vector-ref (unbox-dp-env env) 1) 3))
+  (vector-ref (vector-ref (unbox-dp-env env) 3) 1))
 
 
 ;; Get message callback handlers for msg-type and src-key
@@ -543,11 +624,37 @@
           (if data 
               (let ()
                 (semaphore-wait (get-dp-message-handler-hash-sem env))
-                (when (not (hash-ref (get-dp-message-handler-hash env) msg-type #f))
-                  (hash-set! (get-dp-message-handler-hash env) msg-type (make-hash)))
-                (when (not (hash-ref (hash-ref (get-dp-message-handler-hash env) msg-type) src-key #f))
-                  (hash-set! (hash-ref (get-dp-message-handler-hash env) msg-type) src-key (make-hash)))
-                (hash-set! (hash-ref (get-dp-message-handler-hash env) msg-type) src-key handlers)
+
+                ;; If msg-type hash doesn't exist create it
+                (when (not (hash-ref 
+                             (get-dp-message-handler-hash env) 
+                             msg-type 
+                             #f))
+                  (hash-set! 
+                    (get-dp-message-handler-hash env) 
+                    msg-type 
+                    (make-hash)))
+
+                ;; If src-key hash doesn't exist create it
+                (when (not (hash-ref 
+                             (hash-ref 
+                               (get-dp-message-handler-hash env) 
+                               msg-type) 
+                             src-key 
+                             #f))
+                  (hash-set! 
+                    (hash-ref 
+                      (get-dp-message-handler-hash env) 
+                      msg-type) 
+                    src-key 
+                    (make-hash)))
+
+                ;; Set list of handlers
+                (hash-set! 
+                  (hash-ref 
+                    (get-dp-message-handler-hash env) 
+                    msg-type) 
+                  src-key handlers)
                 (semaphore-post (get-dp-message-handler-hash-sem env))
                 #t)
               #f)])
@@ -555,23 +662,12 @@
     ret))
 
 
-;; Get the datapool->parent channel
-(define (get-datapool-output env [block #f]) 
-  (ch-get (vector-ref (vector-ref (unbox-dp-env env) 2) 1) block))
 
 
-;; Get the semaphore for the parent->dp channel
-(define (get-dp-parent-ch-sem env)
-  (vector-ref (vector-ref (unbox-dp-env env) 2) 2))
-
-
-;; Send info from the datapool to the parent
-(define (send-to-datapool-output-channel env form)
-  (semaphore-wait (get-dp-parent-ch-sem env))
-  (ch-put (get-datapool-output-channel env) form)
-  (semaphore-post (get-dp-parent-ch-sem env)))
-
-
+;;;-------------------------------------------------------------------------- 
+;;; COMPUTATION - thread functions
+;;;--------------------------------------------------------------------------
+;;; threads
 ;; Return thread's queue index if not empty, otherwise gets the index of the 
 ;; fullest queue.
 (define (get-task-q-idx env thread-idx)
@@ -597,9 +693,10 @@
                 #f)
               (let ()
                 (if (queue-empty? (get-dp-queue env q-idx))
-                    #f
                     (let ()
-                      (define task (dequeue! (get-dp-queue env q-idx)))
+                      (semaphore-post (get-dp-queue-sem env q-idx))
+                      #f)
+                    (let ([task (dequeue! (get-dp-queue env q-idx))])
                       (semaphore-post (get-dp-queue-sem env q-idx))
                       task))))))))
 
@@ -626,50 +723,91 @@
 
 ;; Eternal thread tail recursion of executing tasks
 (define (dp-thread env thread-idx) 
-  ;(printf "dp-thread 0\n")
   (let ([task (get-task env thread-idx)])
-    ;  (printf "dp-thread 1\n")
     (if (equal? task #f)
         (let ()
-          ;      (printf "dp-thread 2\n")
-          (thread-suspend (current-thread))
-          )
+          (thread-suspend (current-thread)))
         (let ()
-          ;      (printf "dp-thread 3\n")
           (dp-thread-exec-task ;execute the task we get
             env 
             thread-idx 
-            task)
-          )))
-  ;(printf "dp-thread 4\n")
+            task))))
   (dp-thread env thread-idx))
 
 
-;; Thread startup coroutinetion
+;; Thread startup coroutine
 (define (dp-thread-start env)
-  (let ([pid (current-thread)])
-    (thread-suspend pid)
+  (let ([id (current-thread)])
+    (thread-suspend id)
     (define thread-num 0)
     (for ([i (get-num-dp-threads env)])
-         (when (equal? (get-dp-thread env i) pid) 
+         (when (equal? (get-dp-thread env i) id) 
            (set! thread-num i)))
     (dp-thread env thread-num)))
 
 
-;; Thread startup coroutinetion
+
+;;; process threads
+;; Return thread's queue index if not empty, otherwise gets the index of the 
+;; fullest queue.
+(define (get-task-proc-q-idx env thread-idx)
+  (let ([thread-queue (get-dp-proc-queue env thread-idx)])
+    (if (equal? (queue-length thread-queue) 0)
+        (let ([highest-idx (get-max-dp-proc-q-idx env)])
+          (if (equal? (queue-length (get-dp-proc-queue env highest-idx)) 0) 
+              #f
+              highest-idx))
+        thread-idx)))
+
+
+;; Return a task from a thread queue to execute
+(define (get-proc-task env thread-idx)
+  (let ([q-idx (get-task-proc-q-idx env thread-idx)])
+    (if (equal? q-idx #f)
+        #f
+        (let ()
+          (semaphore-wait (get-dp-proc-queue-sem env q-idx))
+          (if (queue-empty? (get-dp-proc-queue env q-idx))
+              (let ()
+                (semaphore-post (get-dp-proc-queue-sem env q-idx))
+                #f)
+              (let ()
+                (if (queue-empty? (get-dp-proc-queue env q-idx)) 
+                    (let ()
+                      (semaphore-post (get-dp-proc-queue-sem env q-idx))
+                      #f)
+                    (let ([task (dequeue! (get-dp-proc-queue env q-idx))])
+                      (semaphore-post (get-dp-proc-queue-sem env q-idx))
+                      task))))))))
+
+
+;; Eternal thread tail recursion of executing external process tasks
+(define (dp-proc-thread env thread-idx) 
+  (let ([task (get-proc-task env thread-idx)])
+    (if (equal? (car task) #f)
+        (thread-suspend (current-thread)))
+        (let* ([ret (place-channel-put/get (get-process-channel env thread-idx) task)]
+               [ret-key (cdr task)]
+               [ret-field (cddr task)])
+          (when (and ret-key ret-field)
+            (set-data-field! env ret-key ret-field ret))))
+  (dp-proc-thread env thread-idx))
+
+
+;; Thread startup coroutine
 (define (dp-process-thread-start env)
-  (let ([pid (current-thread)])
-    (thread-suspend pid)
+  (let ([id (current-thread)])
+    (thread-suspend id)
     (define thread-num 0)
-    (for ([i (get-num-dp-process-threads env)])
-         (when (equal? (get-dp-thread env i) pid) 
+    (for ([i (get-num-dp-proc-threads env)])
+         (when (equal? (get-dp-thread env i) id) 
            (set! thread-num i)))
-    (dp-thread env thread-num)))
+    (dp-proc-thread env thread-num)))
 
 
 
 ;;;----------------------------------------------------------------------------
-;;; classes & macros
+;;; COMMUNICATION - messaging
 ;;;---------------------------------------------------------------------------- 
 ;; message class 
 (define message%
@@ -701,13 +839,21 @@
 
 ;; PUBLIC API
 ;; Register a callback handler coroutine (the procedure itself, not a 
-;; suspended invocation). This coroutine should accept 1 message% argument.
+;; suspended invocation). This coroutine should accept 1 message argument and 
+;; nothing else.
 ;;
-;; The coroutine will only execute if an incoming message is sent with a matching
-;; src-key to the one specified here. 
+;; The handler will only execute if an incoming message is sent with a matching
+;; src-key to the one specified here. By default this is #f, and will only match 
+;; messages with a src-key equal to #f.
 ;;
 ;; ret-key and ret-field are passed to the (go) form when the handler is invoked.
-(define (register-message-handler env coroutine-procedure msg-type [src-key #f] [ret-key #f] [ret-field #f])
+(define (register-message-handler 
+          env 
+          coroutine-procedure 
+          msg-type 
+          [src-key #f] 
+          [ret-key #f] 
+          [ret-field #f])
   (let ([msg-handlers (get-dp-message-handlers env msg-type src-key)])
     (set-dp-message-handlers! 
       env 
@@ -716,6 +862,7 @@
     #t))
 
 
+;; coroutine to manage sending messages to connected handlers
 (define-coroutine 
   (send-message-co env msg src-key)
   (let ([handlers (get-dp-message-handlers 
@@ -748,11 +895,18 @@
   (let ([data (get-data-intern data-key)])
     (if (not (equal? data #f)) ;if data exists
         (let ()
-          ;Remove all callbacks to the data mapped to key 
           ;Need to protect against all modifications against the data hash AND
           ;the data message hash
           (semaphore-wait (get-data-sem env))
           (semaphore-wait (get-dp-message-handler-hash-sem))
+
+          ;Remove any hash where data-key is the src-key 
+          (hash-for-each 
+            (get-data-hash env)
+            (lambda (msg-type cur-hash)
+              (hash-remove! (hash-ref (get-data-hash env) msg-type) data-key)))
+
+          ;Remove all callbacks to data-key 
           (hash-for-each 
             (get-dp-message-handler-hash env) 
             (lambda (msg-type msg-type-hash)
@@ -782,7 +936,7 @@
 
 
 ;;;---------------------------------------------------------------------------- 
-;; Run unit tests
+;;; TESTING - 3 unit tests
 ;;;---------------------------------------------------------------------------- 
 (define 
   (run-3-unit-tests [print-result #t] [wait #f])
@@ -1102,7 +1256,7 @@
   (let* ([num-threads 2]
          [env (make-datapool num-threads)])
 
-    ;;Arbitrary coroutinetion to execute
+    ;;Arbitrary coroutine to execute
     (define (test-task) #t)
 
     ;;Test defaults
