@@ -36,7 +36,8 @@
   ;;;MESSAGING
   message ;create a message object with a given type and content payload
   message-type ;return a message's type
-  message-content ;return a message's payload
+  message-content ;return a message's payload 
+  message-source ;return a message's source key
   register-message-handler ;register a coroutine procedure that is called when a message with corresponding message-type and source-key 
   send-message ;send a message object to registered message handlers
 
@@ -251,10 +252,10 @@
 ;;channel get, blocks by default
 (define (ch-get ch [block #t])
   (if (place-channel? ch)
+      (place-channel-get ch)
       (if block
           (async-channel-get ch)
-          (async-channel-try-get ch))
-      (place-channel-get ch)))
+          (async-channel-try-get ch))))
 
 
 ;;channel put
@@ -273,9 +274,10 @@
   (let* ([key-src 0]
          [ret
            (box 
-             (vector ;datapool info vector
-               num-threads
-               num-processes
+             (vector  
+               (vector ;datapool info vector 
+                 num-threads
+                 num-processes)
                (make-vector ;threads, queues, and semaphores
                  num-threads)
                (make-vector ;processes, proc management threads, queues, and semaphores
@@ -300,7 +302,7 @@
     (for ([i num-processes])
          (let-values ([(local-channel process-channel) (place-channel)])
            (vector-set! 
-             (vector-ref (unbox ret) 0) 
+             (vector-ref (unbox ret) 2) 
              i
              (vector 
                (list local-channel process-channel) ;process-to-process communication channels
@@ -863,6 +865,12 @@
 
 
 ;; PUBLIC API
+;; Return the message's content
+(define (message-source msg)
+  (get-field src msg))
+
+
+;; PUBLIC API
 ;; Register a callback handler coroutine (the procedure itself, not a 
 ;; suspended invocation). This coroutine should accept 1 message argument and 
 ;; nothing else.
@@ -1127,58 +1135,22 @@
   ;Make a datapool
   (let* ([num-threads 2]
          [num-processes 1]
-         [env (make-datapool num-threads num-processes)])
+         [env (make-datapool num-threads num-processes)]) 
 
-    ;Verify parent->dp channel exists
-    (test-true? 
-      "(and make-datapool get-data) verify parent->dp channel exists" 
-      (async-channel? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            0) 
-          0)) 
-      pr 
+    ;;------------------------------------- 
+    ;; check num counts are correct
+    (test-equal?
+      "number of threads"
+      (vector-ref (vector-ref (unbox-dp-env env) 0) 0)
+      2
+      pr
       wait)
 
-    ;Verify parent->dp semaphore exists
-    (test-true? 
-      "(and make-datapool get-data) verify parent->dp channel semaphore exists" 
-      (semaphore? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            0) 
-          1)) 
-      pr 
-      wait)
-
-    ;Verify dp->parent channel exists
-    (test-true? 
-      "(and make-datapool get-data) verify dp->parent channel exists" 
-      (async-channel? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            0) 
-          2)) 
-      pr 
-      wait)
-
-    ;Verify dp->parent semaphore exists
-    (test-true? 
-      "(and make-datapool get-data) verify dp->parent channel semaphore exists" 
-      (semaphore? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            0) 
-          3)) 
-      pr 
+    (test-equal?
+      "number of processes"
+      (vector-ref (vector-ref (unbox-dp-env env) 0) 1)
+      1
+      pr
       wait)
 
     ;;-------------------------------------
@@ -1257,20 +1229,23 @@
                                        env) 
                                      2) 
                                    i) 
-                                 0)]
-               [o (open-output-string)])
-           (fprintf o "Local place channel exists for place process ~a" i)
-           (test-true? 
-             (get-output-string o #t)
-             (place-channel? (car place-channels))
-             pr 
-             wait)
-           (fprintf o "Remote place channel exists for place process ~a" i)
-           (test-true? 
-             (get-output-string o #t)
-             (place-channel? (cdr place-channels))
-             pr 
-             wait)))
+                                 0)])
+           (let 
+             ([o (open-output-string)])
+             (fprintf o "Local place channel exists for place process ~a" i)
+             (test-true? 
+               (get-output-string o)
+               (place-channel? (car place-channels))
+               pr 
+               wait))
+           (let 
+             ([o (open-output-string)])
+             (fprintf o "Remote place channel exists for place process ~a" i)
+             (test-true? 
+               (get-output-string o)
+               (place-channel? (cdr place-channels))
+               pr 
+               wait))))
 
     ;Verify place processes exist
     (for ([i num-processes])
@@ -1491,9 +1466,7 @@
 
 
   ;;**************************************
-  ;;TEST get-datapool-input-channel 
-  ;;     get-num-dp-threads 
-  ;;     get-dp-thread 
+  ;;TEST get-dp-thread 
   ;;     get-dp-queue 
   ;;     get-dp-queue-sem 
   ;;     get-data-hash 
