@@ -27,8 +27,7 @@
   go-proc ;send a quoted form to be evaluated by another process
 
   ;;;DATA
-  register-data! ;register given object in the datapool 
-  get-data ;get a copy of a registered object via its key 
+  register-data! ;register given object in the datapool
   delete-data! ;delete object and all callbacks pointing to it via its key
   get-data-field ;get the value of a registered object's field
   set-data-field! ;set a registered object's field via its key 
@@ -266,9 +265,9 @@
 
 
 
-;;;--------------------------------------------------------------------------
+;;;----------------------------------------------------------------------------
 ;;; DATAPOOL
-;;;--------------------------------------------------------------------------
+;;;----------------------------------------------------------------------------
 ;;create datapool data 
 (define (make-datapool num-threads num-processes) 
   (let* ([key-src 0]
@@ -363,11 +362,6 @@
 (define (get-num-dp-proc-threads env) 
   (vector-ref (vector-ref (unbox-dp-env env) 0) 1))
 
-;; Get the place channel for specified process index. Things put in the channel 
-;; are visible to the associated process within its personal process-channel
-(define (get-process-channel env proc-num)
-  (car (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) proc-num) 0)))
-
 ;; PUBLIC API
 ;;kill all threads and processes in a datapool
 (define (close-dp env)
@@ -382,9 +376,9 @@
 
 
 
-;;;--------------------------------------------------------------------------
+;;;----------------------------------------------------------------------------
 ;;; COMPUTATION - thread management
-;;;-------------------------------------------------------------------------- 
+;;;----------------------------------------------------------------------------
 ;;;threads
 ;; Get a thread pid at provided index
 (define (get-dp-thread env idx)
@@ -442,24 +436,34 @@
 
 
 ;;;processes (places)
-;; Get a thread pid at provided index
-(define (get-dp-proc-thread env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 0))
+;; Get the place channel for specified process index. Things put in the channel 
+;; are visible to the associated process within its personal process-channel
+(define (get-process-channel env proc-num)
+  (car (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) proc-num) 0)))
 
 
-;; Get a thread pid at provided index
+(define (get-remote-process-channel env proc-num)
+  (car (cdr (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) proc-num) 0))))
+
+
+;; Get a place process pid at provided index
 (define (get-dp-proc env idx)
   (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 1))
 
 
+;; Get a process thread pid at provided index
+(define (get-dp-proc-thread env idx)
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 2))
+
+
 ;; Get a thread task queue at provided index
 (define (get-dp-proc-queue env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 2))
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 3))
 
 
 ;; Get a thread task queue semaphore at provided index
 (define (get-dp-proc-queue-sem env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 3) idx) 3))
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 4))
 
 
 ;; Get the index of the fullest thread task queue
@@ -498,9 +502,9 @@
 
 
 
-;;;--------------------------------------------------------------------------
+;;;----------------------------------------------------------------------------
 ;;; DATA
-;;;-------------------------------------------------------------------------- 
+;;;----------------------------------------------------------------------------
 ;; Get the hash of data objects
 (define (get-data-hash env)
   (vector-ref (vector-ref (unbox-dp-env env) 4) 0))
@@ -541,15 +545,8 @@
 
 
 ;; Get a data object reference from the hash
-(define (get-data-intern env key)
-  (hash-ref (get-data-hash env) key #f))
-
-
-;; PUBLIC API
-;; Get a data object copy from the hash.
 (define (get-data env key)
-  (let ([data (hash-ref (get-data-hash env) key #f)])
-    data))
+  (hash-ref (get-data-hash env) key #f))
 
 
 ;; PUBLIC API
@@ -568,7 +565,7 @@
     (if data 
         (let ()
           (semaphore-wait (get-data-sem env))
-          (set-field! field (get-data-intern env key) val)
+          (set-field! field (get-data env key) val)
           (semaphore-post (get-data-sem env))
           #t)
         #f)))
@@ -594,79 +591,9 @@
 
 
 
-
-;;;--------------------------------------------------------------------------
-;;; COMMUNICATION - message management
-;;;--------------------------------------------------------------------------
-;; Get the hash of message callback handlers
-(define (get-dp-message-handler-hash env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 0))
-
-
-;; Get the message callback handlers semaphore
-(define (get-dp-message-handler-hash-sem env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 1))
-
-
-;; Get message callback handlers for msg-type and src-key
-(define (get-dp-message-handlers env msg-type src-key)
-  (if (hash-ref (get-dp-message-handler-hash env) msg-type #f)
-      (hash-ref (hash-ref (get-dp-message-handler-hash env) msg-type) src-key #f)
-      #f))
-
-
-;; Set the message handlers list for msg-type and src-key to something new
-(define (set-dp-message-handlers! env msg-type src-key handlers) 
-  (semaphore-wait (get-data-sem env))
-  (define data (get-data env src-key))
-
-  (let ([ret
-          (if data 
-              (let ()
-                (semaphore-wait (get-dp-message-handler-hash-sem env))
-
-                ;; If msg-type hash doesn't exist create it
-                (when (not (hash-ref 
-                             (get-dp-message-handler-hash env) 
-                             msg-type 
-                             #f))
-                  (hash-set! 
-                    (get-dp-message-handler-hash env) 
-                    msg-type 
-                    (make-hash)))
-
-                ;; If src-key hash doesn't exist create it
-                (when (not (hash-ref 
-                             (hash-ref 
-                               (get-dp-message-handler-hash env) 
-                               msg-type) 
-                             src-key 
-                             #f))
-                  (hash-set! 
-                    (hash-ref 
-                      (get-dp-message-handler-hash env) 
-                      msg-type) 
-                    src-key 
-                    (make-hash)))
-
-                ;; Set list of handlers
-                (hash-set! 
-                  (hash-ref 
-                    (get-dp-message-handler-hash env) 
-                    msg-type) 
-                  src-key handlers)
-                (semaphore-post (get-dp-message-handler-hash-sem env))
-                #t)
-              #f)])
-    (semaphore-post (get-data-sem env))
-    ret))
-
-
-
-
-;;;-------------------------------------------------------------------------- 
+;;;----------------------------------------------------------------------------
 ;;; COMPUTATION - thread functions
-;;;--------------------------------------------------------------------------
+;;;----------------------------------------------------------------------------
 ;;; threads
 ;; Return thread's queue index if not empty, otherwise gets the index of the 
 ;; fullest queue.
@@ -870,6 +797,70 @@
   (get-field src msg))
 
 
+;; Get the hash of message callback handlers
+(define (get-dp-message-handler-hash env)
+  (vector-ref (vector-ref (unbox-dp-env env) 3) 0))
+
+
+;; Get the message callback handlers semaphore
+(define (get-dp-message-handler-hash-sem env)
+  (vector-ref (vector-ref (unbox-dp-env env) 3) 1))
+
+
+;; Get message callback handlers for msg-type and src-key
+(define (get-dp-message-handlers env msg-type src-key)
+  (if (hash-ref (get-dp-message-handler-hash env) msg-type #f)
+      (hash-ref (hash-ref (get-dp-message-handler-hash env) msg-type) src-key #f)
+      #f))
+
+
+;; Set the message handlers list for msg-type and src-key to something new
+(define (set-dp-message-handlers! env msg-type src-key handlers) 
+  (semaphore-wait (get-data-sem env))
+  (define data (get-data env src-key))
+
+  (let ([ret
+          (if data 
+              (let ()
+                (semaphore-wait (get-dp-message-handler-hash-sem env))
+
+                ;; If msg-type hash doesn't exist create it
+                (when (not (hash-ref 
+                             (get-dp-message-handler-hash env) 
+                             msg-type 
+                             #f))
+                  (hash-set! 
+                    (get-dp-message-handler-hash env) 
+                    msg-type 
+                    (make-hash)))
+
+                ;; If src-key hash doesn't exist create it
+                (when (not (hash-ref 
+                             (hash-ref 
+                               (get-dp-message-handler-hash env) 
+                               msg-type) 
+                             src-key 
+                             #f))
+                  (hash-set! 
+                    (hash-ref 
+                      (get-dp-message-handler-hash env) 
+                      msg-type) 
+                    src-key 
+                    (make-hash)))
+
+                ;; Set list of handlers
+                (hash-set! 
+                  (hash-ref 
+                    (get-dp-message-handler-hash env) 
+                    msg-type) 
+                  src-key handlers)
+                (semaphore-post (get-dp-message-handler-hash-sem env))
+                #t)
+              #f)])
+    (semaphore-post (get-data-sem env))
+    ret))
+
+
 ;; PUBLIC API
 ;; Register a callback handler coroutine (the procedure itself, not a 
 ;; suspended invocation). This coroutine should accept 1 message argument and 
@@ -925,19 +916,19 @@
 ;; Data destructor. Removes message handlers, removes the data from the data 
 ;; hash, and enqueues the now free data key onto a free floating key queue
 (define (delete-data! env data-key) 
-  (let ([data (get-data-intern data-key)])
+  (let ([data (get-data env data-key)])
     (if (not (equal? data #f)) ;if data exists
         (let ()
           ;Need to protect against all modifications against the data hash AND
           ;the data message hash
           (semaphore-wait (get-data-sem env))
-          (semaphore-wait (get-dp-message-handler-hash-sem))
+          (semaphore-wait (get-dp-message-handler-hash-sem env))
 
           ;Remove any hash where data-key is the src-key 
           (hash-for-each 
-            (get-data-hash env)
+            (get-dp-message-handler-hash env)
             (lambda (msg-type cur-hash)
-              (hash-remove! (hash-ref (get-data-hash env) msg-type) data-key)))
+              (hash-remove! (hash-ref (get-dp-message-handler-hash env) msg-type) data-key)))
 
           ;Remove all callbacks to data-key 
           (hash-for-each 
@@ -956,13 +947,13 @@
                                  msg-type)
                                src-key
                                new-handlers))))))
-          (semaphore-post (get-dp-message-handler-hash-sem))
+          (semaphore-post (get-dp-message-handler-hash-sem env))
 
           ;Remove the data from the hash
           (hash-set! (get-data-hash env) data-key #f)
           (semaphore-post (get-data-sem env))
 
-          (add-free-dp-data-key data-key)
+          (add-free-dp-data-key env data-key)
           #t)
         #f))) 
 
@@ -1134,7 +1125,7 @@
   (test-section "datapool data constructor, getter, and destructor functions")
   ;Make a datapool
   (let* ([num-threads 2]
-         [num-processes 1]
+         [num-processes 2]
          [env (make-datapool num-threads num-processes)]) 
 
     ;;------------------------------------- 
@@ -1149,7 +1140,7 @@
     (test-equal?
       "number of processes"
       (vector-ref (vector-ref (unbox-dp-env env) 0) 1)
-      1
+      2
       pr
       wait)
 
@@ -1243,7 +1234,7 @@
              (fprintf o "Remote place channel exists for place process ~a" i)
              (test-true? 
                (get-output-string o)
-               (place-channel? (cdr place-channels))
+               (place-channel? (car (cdr place-channels)))
                pr 
                wait))))
 
@@ -1548,7 +1539,7 @@
     ;--------------------------------------
     ;verify correct num of process threads exist 
     (test-equal? 
-      "get-num-dp-threads verify correct num of threads exist" 
+      "get-num-dp-proc-threads verify correct num of threads exist" 
       (get-num-dp-proc-threads env) 
       2 
       pr 
@@ -1556,39 +1547,39 @@
 
     ;verify threads exist 
     (test-true? 
-      "get-dp-thread verify threads exist 1" 
+      "get-dp-proc-thread verify threads exist 1" 
       (thread? (get-dp-proc-thread env 0)) 
       pr 
       wait)
 
     (test-true? 
-      "get-dp-thread verify threads exist 2" 
+      "get-dp-proc-thread verify threads exist 2" 
       (thread? (get-dp-proc-thread env 1)) 
       pr 
       wait)
 
     ;verify thread task queues exist
     (test-true? 
-      "get-dp-queue verify thread task queues exist 1" 
+      "get-dp-proc-queue verify thread task queues exist 1" 
       (queue? (get-dp-proc-queue env 0)) 
       pr 
       wait)
 
     (test-true? 
-      "get-dp-queue verify thread task queues exist 2" 
+      "get-dp-proc-queue verify thread task queues exist 2" 
       (queue? (get-dp-proc-queue env 1)) 
       pr 
       wait)
 
     ;verify thread task queues semaphores exist
     (test-true? 
-      "get-dp-queue-sem verify thread task queues semaphores exist 1" 
+      "get-dp-proc-queue-sem verify thread task queues semaphores exist 1" 
       (semaphore? (get-dp-proc-queue-sem env 0)) 
       pr 
       wait)
 
     (test-true? 
-      "get-dp-queue-sem verify thread task queues semaphores exist 2" 
+      "get-dp-proc-queue-sem verify thread task queues semaphores exist 2" 
       (semaphore? (get-dp-proc-queue-sem env 1)) 
       pr 
       wait)
@@ -1700,7 +1691,8 @@
 
   ;;**************************************
   ;;TEST hash-data!
-  ;;     get-data-intern
+  ;;     get-data 
+  ;;     get-data
   ;;     delete-data!
   ;;--------------------------------------
   (test-section "manage data objects")
@@ -1710,50 +1702,74 @@
 
     (define test-class%
       (class object% (super-new)
-             (define/public (get-3)
-                            3)))
+             (field [3-field 3])
+             (define/public (get-3) 3-field)))
 
     (define test-object (make-object test-class%))
 
     (test-equal? "get-data-hash 1" (hash-count (get-data-hash env)) 0 pr wait)
     (test-true? "hash-data! 1" (hash-data! env 0 test-object) pr wait)
-    (test-true? "hash-data! 2" (not (hash-data! env 0 test-object)) pr wait)
+    (test-true? "hash-data! 2" (hash-data! env 0 test-object) pr wait)
 
-    (test-equal? "get-data-intern 1" (send (get-data-intern env 0) get-3) 3 pr wait)
-    (test-true? "get-data-intern 2" (not (get-data-intern env 1)) pr wait)
+    (test-equal? "get-data 1" (send (get-data env 0) get-3) 3 pr wait)
+    (test-true? "get-data 2" (not (get-data env 1)) pr wait) 
+
+    (set-field! 3-field (get-data env 0) 2)
+    (test-equal? "set-field succeeded?" (get-field 3-field (get-data env 0)) 2 pr wait)
 
     (test-true? "delete-data! 1" (delete-data! env 0) pr wait)
-    (test-true? "get-data-intern 1" (not (get-data-intern env 0)) pr wait)
+    (test-true? "get-data 1" (not (get-data env 0)) pr wait)
     (close-dp env))
   ;;**************************************
 
 
   ;;**************************************
-  ;;TEST get-dp-message-handler-hash
+  ;;TEST message%
+  ;;     message 
+  ;;     message-type 
+  ;;     message-source
+  ;;     message-content 
+  ;;     get-dp-message-handler-hash
   ;;     get-dp-message-handler-hash-sem
   ;;     set-dp-message-handlers!
+  ;;     register-message-handler 
+  ;;     send-message-co
+  ;;     send-message
   ;;--------------------------------------
   (test-section "manage message handlers")
   (let* ([num-threads 2]
          [num-processes 2]
          [env (make-datapool num-threads num-processes)])
+
+    ;;TODO:
+    ;;     message%
+    ;;     message 
+    ;;     message-type 
+    ;;     message-source
+    ;;     message-content 
+
     (test-true? "get-dp-message-handler-hash" (hash? (get-dp-message-handler-hash env)) pr wait)
     (test-true? "get-dp-message-handler-hash-sem" (semaphore? (get-dp-message-handler-hash-sem env)) pr wait)
 
     (define test-type 'test-type)
+    (define test-source 12)
     (define callback-form (lambda () 1))
     (test-equal? "callback check" (callback-form) 1 pr wait)
 
     ;Probably should rework this coroutine to be simpler. However, it's not 
     ;exposed by the module and should only be used internally so it's probably 
     ;fine for now
-    (set-dp-message-handlers! env test-type (list callback-form))
+    (let ([hash-ret (set-dp-message-handlers! env test-type test-source (list callback-form))])
+      (test-true? "set-dp-message-handlers!" hash-ret pr wait))
 
-    (test-equal? "(and set-dp-message-handlers! get-dp-message-handler-hash) 1" 
-                 ((car (hash-ref (get-dp-message-handler-hash env) test-type)))
-                 (callback-form) 
-                 pr 
-                 wait)
+
+    (let ([hash-ret (hash-ref (get-dp-message-handler-hash env) test-type #f)])
+      (test-true? "returned value is a hash" (hash? hash-ret) pr wait)
+      (test-equal? "(and set-dp-message-handlers! get-dp-message-handler-hash) 1" 
+                   ((car (hash-ref hash-ret test-source #f)))
+                   (callback-form) 
+                   pr 
+                   wait))
 
     (define callback-form-2 (lambda () 2))
     (test-equal? "callback check 2" (callback-form-2) 2 pr wait)
@@ -1761,6 +1777,7 @@
     (set-dp-message-handlers! 
       env 
       test-type 
+      test-source
       (append 
         (hash-ref (get-dp-message-handler-hash env) test-type) 
         (list callback-form-2)))
@@ -1782,6 +1799,11 @@
                           ((list-ref post-handlers i))
                           pr
                           wait))))
+
+    ;;TODO:
+    ;;     register-message-handler 
+    ;;     send-message-co
+    ;;     send-message
     (close-dp env))
   ;;**************************************
 
