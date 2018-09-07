@@ -584,7 +584,7 @@
 (define (register-data! env data)
   (if (object? data)
       (let ([key (gen-dp-data-obj-key env)])
-        (if (not (get-data env key)) ;don't hash if data exists
+        (if (not (get-data env key)) ;don't hash if data exists 
             (hash-data! env key data)
             #f))
       #f))
@@ -1691,14 +1691,21 @@
 
   ;;**************************************
   ;;TEST hash-data!
-  ;;     get-data 
-  ;;     get-data
-  ;;     delete-data!
+  ;;     get-data  
+  ;;     register-data!
   ;;--------------------------------------
   (test-section "manage data objects")
   (let* ([num-threads 2]
          [num-processes 2]
-         [env (make-datapool num-threads num-processes)])
+         [env (make-datapool num-threads num-processes)]) 
+
+    (define test-key 1337)
+
+    (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) 0 pr wait)
+    (test-true? "hash-data! number" (hash-data! env test-key 3) pr wait)
+    (test-true? "hash-data! string" (hash-data! env test-key "3") pr wait)
+    (test-true? "hash-data! list" (hash-data! env test-key (list 3)) pr wait)
+    (test-true? "hash-data! quote" (hash-data! env test-key '(3)) pr wait)
 
     (define test-class%
       (class object% (super-new)
@@ -1707,18 +1714,26 @@
 
     (define test-object (make-object test-class%))
 
-    (test-equal? "get-data-hash 1" (hash-count (get-data-hash env)) 0 pr wait)
-    (test-true? "hash-data! 1" (hash-data! env 0 test-object) pr wait)
-    (test-true? "hash-data! 2" (hash-data! env 0 test-object) pr wait)
+    (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) 1 pr wait)
+    (test-true? "hash-data! 1" (hash-data! env test-key test-object) pr wait)
+    (test-true? "hash-data! 2" (hash-data! env test-key test-object) pr wait)
 
-    (test-equal? "get-data 1" (send (get-data env 0) get-3) 3 pr wait)
+    (test-equal? "get-data 1" (send (get-data env test-key) get-3) 3 pr wait)
     (test-true? "get-data 2" (not (get-data env 1)) pr wait) 
 
-    (set-field! 3-field (get-data env 0) 2)
-    (test-equal? "set-field succeeded?" (get-field 3-field (get-data env 0)) 2 pr wait)
+    (set-field! 3-field (get-data env test-key) 2)
+    (test-equal? "set-field succeeded?" (get-field 3-field (get-data env test-key)) 2 pr wait) 
 
-    (test-true? "delete-data! 1" (delete-data! env 0) pr wait)
-    (test-true? "get-data 1" (not (get-data env 0)) pr wait)
+
+    (test-true? "register-data! number fails" (not (register-data! env 3)) pr wait)
+    (test-true? "register-data! string fails" (not (register-data! env "3")) pr wait)
+    (test-true? "register-data! list fails" (not (register-data! env (list 3))) pr wait)
+    (test-true? "register-data! quote fails" (not (register-data! env '(3))) pr wait)
+
+    (let ([hash-size (hash-count (get-data-hash env))])
+      (let ([key (register-data! env test-object)])
+        (test-true? "register-data! object succeeds" key pr wait)
+        (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) (+ hash-size 1) pr wait)))
     (close-dp env))
   ;;**************************************
 
@@ -1734,7 +1749,8 @@
   ;;     set-dp-message-handlers!
   ;;     register-message-handler 
   ;;     send-message-co
-  ;;     send-message
+  ;;     send-message 
+  ;;     delete-data!
   ;;--------------------------------------
   (test-section "manage message handlers")
   (let* ([num-threads 2]
@@ -1756,9 +1772,6 @@
     (define callback-form (lambda () 1))
     (test-equal? "callback check" (callback-form) 1 pr wait)
 
-    ;Probably should rework this coroutine to be simpler. However, it's not 
-    ;exposed by the module and should only be used internally so it's probably 
-    ;fine for now
     (let ([hash-ret (set-dp-message-handlers! env test-type test-source (list callback-form))])
       (test-true? "set-dp-message-handlers!" hash-ret pr wait))
 
@@ -1800,10 +1813,26 @@
                           pr
                           wait))))
 
+    (define test-class%
+      (class object% (super-new)
+             (field [3-field 3])
+             (define/public (get-3) 3-field)))
+
+    (define test-object (make-object test-class%))
+
     ;;TODO:
     ;;     register-message-handler 
     ;;     send-message-co
-    ;;     send-message
+    ;;     send-message 
+    ;; 
+
+    (let ([hash-size (hash-count (get-data-hash env))])
+      (let ([key (register-data! env test-object)])
+        (test-true? "register-data! object succeeds" key pr wait)
+        (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) (+ hash-size 1) pr wait)
+        (test-true? "delete-data!" (delete-data! env key) pr wait)
+        (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) hash-size pr wait)
+        (test-true? "get-data fails" (not (get-data env key)) pr wait)))
     (close-dp env))
   ;;**************************************
 
@@ -1813,8 +1842,7 @@
   ;;     dp-thread-exec-task
   ;;     dp-thread
   ;;     dp-thread-start
-  ;;     go ;from within datapool
-  ;;     go ;from parent
+  ;;     go
   ;;--------------------------------------
   (test-section "datapool thread internal functions")
   (let* ([num-threads 2]
@@ -1915,7 +1943,6 @@
                [ret (ch-get ch #f)])
            (test-equal? "Did expected val get placed in channel" ret val pr wait)))
     (close-dp env))
-
   ;;**************************************
 
   ;;**************************************
@@ -2112,49 +2139,22 @@
 
     (close-dp env))
   ;;**************************************
-
+  
   ;;**************************************
-  ;;TEST message%
+  ;;TEST go ;datapool interactions set-data-field! and send-message
   ;;--------------------------------------
-  ;(let ([num-threads 2])
-  ;(let 
-  ;      ([*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
-  ;      [*datapool-environment-data* (make-datapool num-threads)]
-  ;      [*data-obj-key-src* 0])
-  ;  ))
+  
   ;;**************************************
-
-  ;;**************************************
-  ;;TEST data%
-  ;;     register-message-handler
-  ;;     send
-  ;;     deleted?
-  ;;     delete
-  ;;     message
-  ;;     receive
-  ;;     set-datum
+  ;;TEST go-proc
   ;;--------------------------------------
-  ;(let ([num-threads 2])
-  ;(let 
-  ;      ([*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
-  ;      [*datapool-environment-data* (make-datapool num-threads)]
-  ;      [*data-obj-key-src* 0])
-  ;  ))
+  
   ;;**************************************
-
-  ;;**************************************
-  ;;TEST data
-  ;;     delete-data
+  ;;TEST go-proc; stress test
   ;;--------------------------------------
-  ;(let ([num-threads 2])
-  ;(let 
-  ;      ([*dp-thread-continuous-eval-limit* *dp-thread-continuous-eval-limit*]
-  ;      [*datapool-environment-data* (make-datapool num-threads)]
-  ;      [*data-obj-key-src* 0])
-  ;  ))
+  
   ;;**************************************
-
-
+  ;;TEST go-proc ;datapool interactions set-data-field! and send-message
+  ;;--------------------------------------
 
   ;;;---------------------------------------------------------------------------- 
   ;;; Feature Tests
