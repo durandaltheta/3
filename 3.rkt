@@ -10,9 +10,13 @@
 ;;;;Computation wants to be asynchronous and seamless
 
 ;;;TODO:
-;;; 1. parallel place debugging
-;;; 2. separate datapool into datapool and computepool
-;;; 3. investigate and implement error handling correctly
+;;; 1. separate datapool into datapool and computepool
+;;; 2. convert pools to structs
+;;; 3. parallel place debugging
+;;; 4. finish basic unit tests (including removed tests)
+;;; 5. investigate and implement error handling correctly
+;;; 6. expand unit tests to test edge-case inputs
+;;; 7. optimize: yield, datapool/computepool structure, threading
 
 (provide 
   ;;;DATAPOOL
@@ -2014,9 +2018,7 @@
 
     ;;TODO:
     ;;     register-message-handler 
-    ;;     send-message-co
-    ;;     send-message 
-    ;; 
+    ;;     delete-data! (make sure message handler is removed)
 
     (let ([hash-size (hash-count (get-data-hash env))])
       (let ([key (register-data! env test-object)])
