@@ -2139,12 +2139,15 @@
             (inner-loop env idxs)))))
     (inner-loop env idxs))
 
+  (define (iterations-per-second milli iter)
+    (/ iter (/ milli 1000)))
+
   ;;**************************************
   ;;TEST go ;stress test
   ;;--------------------------------------
-  (test-section "go stress test")
+  (test-section "go stress test: basic (go) invocations")
   (let* ([num-threads 8]
-         [num-processes 2]
+         [num-processes 0]
          [env (make-datapool num-threads num-processes)])
 
     (define-coroutine
@@ -2153,15 +2156,19 @@
         (if (equal? x 0)
           #t
           (let ([x (- x 1)])
-           (inner x))))
+            (inner x))))
       (inner inp-x))
 
 
     (let ([start-time (current-inexact-milliseconds)]
-          [v 1000])
+          [v 1000]
+          [go-count 0]
+          [iterations 0])
       (for ([i v])
            (for ([x i]) 
-                (go env (test-ro x)))
+                (set! go-count (+ go-count 1))
+                (go env (test-ro x))
+                (set! iterations (+ iterations x)))
 
            (when (equal? (remainder i 100) 0)
              (printf "\tfinished i: ~a\n" i)))
@@ -2171,7 +2178,10 @@
            (let ([o (open-output-string)])
              (fprintf o "length q[~a]" i)
              (test-equal? (get-output-string o) (queue-length (get-dp-queue env i)) 0 pr wait)))
-      (printf "Benchmark time (milli) for ~a (go) calls (each evaluation looping i times, where i is the current (go) iteration), in ~a threads, with no yields or returns: ~a\n"  v num-threads (- (current-inexact-milliseconds) start-time)))
+      (let ([time (- (current-inexact-milliseconds) start-time)])
+        (printf "Benchmark time (milli) for ~a loop iterations. That means u through ~a iterations with i through u (go) calls (each evaluation looping i times, where i is the current (go) iteration), in ~a threads, with no yields or returns: ~a\n" iterations v num-threads time)
+        (printf "(go) invocations: ~a\n" go-count)
+        (printf "loop iterations per second: ~a\n" (iterations-per-second time iterations))))
 
     (close-dp env)) 
   ;;--------------------------------------
@@ -2180,12 +2190,27 @@
   ;;TEST go ;stress test 2
   ;;--------------------------------------
 
-  (test-section "go stress test 2")
+  (test-section "go stress test 2: timing comparisions for addition")
   (let* ([num-threads 8]
          [num-processes 0]
          [env (make-datapool num-threads num-processes)])
 
     (sleep 0.1)
+    (define-coroutine 
+      (go-return x)
+      x)
+
+    (let ([start-time (current-inexact-milliseconds)]
+          [x 8000])
+      (for ([i x])
+        (go env (go-return i)))
+      (wait-len env)
+      (let ([time (- (current-inexact-milliseconds) start-time)])
+        (printf "Benchmark time (milli) for ~a immediately returning (go) operations: ~a\n" x time)
+        (printf "(go) operations per second: ~a\n\n" (iterations-per-second time x))))
+    ;------------------------------------------------------------------------
+    (sleep 0.5)
+
 
     (let ([x 1000]
           [inner-x 1000000]) ;1,000,000 
@@ -2202,52 +2227,30 @@
       ;------------------------------------------------------------------------
       (sleep 0.5)
 
-      (let ([start-time (current-inexact-milliseconds)])
+      (let ([start-time (current-inexact-milliseconds)]
+            [iterations 0])
         (for ([u num-threads])
              (for ([i x])
+                  (set! iterations (+ iterations x))
                   (go env (eval-x-times env x #f))))
         (wait-len env)
-        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with (when yield) checks: ~a\n"  (* x num-threads) x num-threads (- (current-inexact-milliseconds) start-time)))
-
-      #|
-      (for ([i num-threads])
-           (let ([o (open-output-string)])
-             (fprintf o "length q[~a]" i)
-             (test-equal? (get-output-string o) (queue-length (get-dp-queue env i)) 0 pr wait)))
-      |#
-      ;------------------------------------------------------------------------
-
-      #|
-      (sleep 0.5)
-
-      (let ([start-time (current-inexact-milliseconds)])
-        (for ([u num-threads])
-             (for ([i x])
-                  (go env (eval-x-times env x #t))))
-        (wait-len env)
-        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with yield on each loop: ~a\n"  (* x num-threads) x num-threads (- (current-inexact-milliseconds) start-time)))
-
-      (for ([i num-threads])
-           (let ([o (open-output-string)])
-             (fprintf o "length q[~a]" i)
-             (test-equal? (get-output-string o) (queue-length (get-dp-queue env i)) 0 pr wait)))
-      |#
+        (let ([time (- (current-inexact-milliseconds) start-time)])
+          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with (when yield) checks: ~a\n"  (* x num-threads) x num-threads time)
+          (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
       ;------------------------------------------------------------------------ 
 
       (sleep 0.5)
 
-      (let ([start-time (current-inexact-milliseconds)])
+      (let ([start-time (current-inexact-milliseconds)]
+            [iterations 0])
         (for ([i num-threads])
+             (set! iterations (+ iterations inner-x))
              (go env (eval-x-times env inner-x)))
         (wait-len env)
-        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads in coroutine without yield calls: ~a\n"  num-threads inner-x num-threads (- (current-inexact-milliseconds) start-time)))
+        (let ([time (- (current-inexact-milliseconds) start-time)])
+          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads in coroutine without yield calls: ~a\n"  num-threads inner-x num-threads time)
+          (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
 
-      #|
-      (for ([i num-threads])
-           (let ([o (open-output-string)])
-             (fprintf o "length q[~a]" i)
-             (test-equal? (get-output-string o) (queue-length (get-dp-queue env i)) 0 pr wait)))
-      |#
       ;------------------------------------------------------------------------ 
 
       (sleep 0.5)
@@ -2262,53 +2265,61 @@
         (future (thunk (in-loop inp-x))))
 
 
-      (let ([start-time (current-inexact-milliseconds)])
+      (let ([start-time (current-inexact-milliseconds)]
+            [iterations 0])
         (for ([i num-threads])
+             (set! iterations (+ iterations inner-x))
              (go env (eval-x-times-parallel env inner-x)))
         (wait-len env)
-        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads and ~a parallel futures: ~a\n"  num-threads inner-x num-threads 8 (- (current-inexact-milliseconds) start-time)))
-
-      #|
-      (for ([i num-threads])
-           (let ([o (open-output-string)])
-             (fprintf o "length q[~a]" i)
-             (test-equal? (get-output-string o) (queue-length (get-dp-queue env i)) 0 pr wait)))
-      |#
-    ) 
+        (let ([time (- (current-inexact-milliseconds) start-time)])
+          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads and ~a parallel processed futures: ~a\n"  num-threads inner-x num-threads 8 time)
+          (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations)))))
     ;------------------------------------------------------------------------ 
 
     (close-dp env))
-;;**************************************
+  ;;**************************************
+  
 
-;;**************************************
-;;TEST go ;datapool interactions 
-;;     send-message-co
-;;     send-message
-;;     set-data-field!
-;;--------------------------------------
+  ;;**************************************
+  ;;TEST go stress test 3 ;results of calculation
+  ;;--------------------------------------
+  (test-section "go stress test 3: collating results")
+  (let* ([num-threads 8]
+         [num-processes 0]
+         [env (make-datapool num-threads num-processes)]
+         [x 1000000]
+         [ch (channel)])
+    (close-dp env))
 
-;;**************************************
-;;TEST go-proc
-;;--------------------------------------
+  ;;**************************************
+  ;;TEST go ;datapool interactions 
+  ;;     send-message-co
+  ;;     send-message
+  ;;     set-data-field!
+  ;;--------------------------------------
 
-;;**************************************
-;;TEST go-proc; stress test
-;;--------------------------------------
+  ;;**************************************
+  ;;TEST go-proc
+  ;;--------------------------------------
 
-;;**************************************
-;;TEST go-proc ;datapool interactions set-data-field! and send-message
-;;--------------------------------------
+  ;;**************************************
+  ;;TEST go-proc; stress test
+  ;;--------------------------------------
 
-;;;---------------------------------------------------------------------------- 
-;;; Feature Tests
-;;;---------------------------------------------------------------------------- 
-;TODO figure out how to get argv & argc 
-;(define dp1 (make-datapool 4 '(main argv argc)))
-;(let ([ch (get-datapool-input-channel dp1)]) 
-;(ch-get ch))
+  ;;**************************************
+  ;;TEST go-proc ;datapool interactions set-data-field! and send-message
+  ;;--------------------------------------
+
+  ;;;---------------------------------------------------------------------------- 
+  ;;; Feature Tests
+  ;;;---------------------------------------------------------------------------- 
+  ;TODO figure out how to get argv & argc 
+  ;(define dp1 (make-datapool 4 '(main argv argc)))
+  ;(let ([ch (get-datapool-input-channel dp1)]) 
+  ;(ch-get ch))
 
 
-;;;---------------------------------------------------------------------------- 
-;;; Closing Analysis
-;;;---------------------------------------------------------------------------- 
-(print-test-report))
+  ;;;---------------------------------------------------------------------------- 
+  ;;; Closing Analysis
+  ;;;---------------------------------------------------------------------------- 
+  (print-test-report))
