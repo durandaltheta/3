@@ -22,7 +22,6 @@
   ;;;DATAPOOL
   make-datapool ;start a datapool
   get-num-dp-threads 
-  get-num-dp-proc-threads 
   close-dp ;kill all threads and processes in the datapool 
 
   ;;;COMMUNICATION
@@ -33,7 +32,6 @@
   ;;;COMPUTATION
   define-coroutine ;return a coroutine procedure. When invoked produces a suspended coroutine for use in (go)
   go ;place a coroutine in a queue to be executed by a thread 
-  go-proc ;send a quoted form to be evaluated by another process
 
   ;;;DATA
   register-data! ;register given object in the datapool
@@ -336,18 +334,15 @@
 ;;; DATAPOOL
 ;;;----------------------------------------------------------------------------
 ;;create datapool data 
-(define (make-datapool num-threads num-processes) 
+(define (make-datapool num-threads) 
   (let* ([key-src 0]
          [ret
            (box 
              (vector  
                (vector ;datapool info vector 
-                 num-threads
-                 num-processes)
+                 num-threads)
                (make-vector ;threads, queues, and semaphores
                  num-threads)
-               (make-vector ;processes, proc management threads, queues, and semaphores
-                 num-processes)
                (vector ;message handler vector
                  (make-hash) ;hash table of lists of message handlers
                  (make-semaphore 1)) ;message handlers semaphore
@@ -365,53 +360,6 @@
                (thread (thunk (dp-thread-start ret))) ;threads
                (make-queue) ;thread task queues
                (make-semaphore 1))))) ;thread task queue semaphores 
-    (for ([i num-processes])
-         (let-values ([(local-channel process-channel) (place-channel)])
-                     (vector-set! 
-                       (vector-ref (unbox ret) 2) 
-                       i
-                       (vector 
-                         (list local-channel process-channel) ;process-to-process communication channels
-                         (place
-                           process-channel
-                           ;#lang racket 
-                           (define (dp-process)
-                             (with-handlers 
-                               ([exn:fail? 
-                                  (lambda (e)
-                                    (let ([o (open-output-string)])
-                                      (fprintf o "Got error: ~a\n" e)
-                                      (place-channel-put 
-                                        process-channel 
-                                        'died-before-execution)
-                                      (place-channel-put 
-                                        process-channel 
-                                        (get-output-string o))
-                                      (dp-process)))])
-                               (let* ([task-bundle (place-channel-get process-channel)]
-                                      [quoted-task (car task-bundle)]
-                                      [user-channel (car (cdr task-bundle))])
-                                 (with-handlers 
-                                   ([exn:fail? 
-                                      (lambda (e)
-                                        (let ([o (open-output-string)])
-                                          (fprintf o "Got error: ~a\n" e)
-                                          (place-channel-put 
-                                            process-channel 
-                                            'died-during-execution)
-                                          (place-channel-put 
-                                            process-channel 
-                                            (get-output-string o))
-                                          (dp-process)))])
-                                   (if quoted-task
-                                     (let ([ret (eval quoted-task (current-namespace))])
-                                       (place-channel-put process-channel ret)
-                                       (dp-process))
-                                     #f))))) ;if no task end process
-                           (dp-process))
-                         (thread (thunk (dp-process-thread-start ret))) ;threads 
-                         (make-queue) ;process thread task queues
-                         (make-semaphore 1))))) ;thread task queue semaphores 
     ret)) ;return a 'by reference' symbol
 
 
@@ -424,16 +372,8 @@
 (define (get-num-dp-threads env) 
   (when (not (vector? (unbox-dp-env env)))
     (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-
   (vector-ref (vector-ref (unbox-dp-env env) 0) 0))
 
-;; PUBLIC API
-;; Return number of threads in the datapool
-(define (get-num-dp-proc-threads env) 
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-
-  (vector-ref (vector-ref (unbox-dp-env env) 0) 1))
 
 ;; PUBLIC API
 ;;kill all threads and processes in a datapool
@@ -443,12 +383,7 @@
 
   ;kill threads
   (for ([i (get-num-dp-threads env)])
-       (kill-thread (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) i) 0)))
-
-  ;kill processes
-  (for ([i (get-num-dp-proc-threads env)])
-       (place-kill (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) i) 1))
-       (kill-thread (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) i) 2))))
+       (kill-thread (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) i) 0))))
 
 
 
@@ -521,108 +456,32 @@
 
 
 
-;;;processes (places)
-;; Get the place channel for specified process index. Things put in the channel 
-;; are visible to the associated process within its personal process-channel
-(define (get-process-channel env proc-num)
-  (car (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) proc-num) 0)))
-
-
-(define (get-remote-process-channel env proc-num)
-  (car (cdr (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) proc-num) 0))))
-
-
-;; Get a place process pid at provided index
-(define (get-dp-proc env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 1))
-
-
-;; Get a process thread pid at provided index
-(define (get-dp-proc-thread env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 2))
-
-
-;; Get a thread task queue at provided index
-(define (get-dp-proc-queue env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 3))
-
-
-;; Get a thread task queue semaphore at provided index
-(define (get-dp-proc-queue-sem env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 2) idx) 4))
-
-
-;; Get the index of the fullest thread task queue
-(define (get-max-dp-proc-q-idx env)
-  (define longest (cons (queue-length (get-dp-proc-queue env 0)) 0))
-  (when (> (get-num-dp-proc-threads env) 1)
-    (for ([i (in-range 1 (get-num-dp-proc-threads env))])
-         (let ([cur-q-len (queue-length (get-dp-proc-queue env i))])
-           (when (< (car longest) cur-q-len)
-             (begin
-               (set! longest (cons cur-q-len i)))))))
-  (cdr longest))
-
-
-;; Get the index of the emptiest thread task queue
-(define (get-min-dp-proc-q-idx env)
-  (define shortest (cons (queue-length (get-dp-proc-queue env 0)) 0))
-  (when (> (get-num-dp-proc-threads env) 1)
-    (for ([i (in-range 1 (get-num-dp-proc-threads env))])
-         (let ([cur-q-len (queue-length (get-dp-proc-queue env i))])
-           (when (> (car shortest) cur-q-len)
-             (begin
-               (set! shortest (cons cur-q-len i)))))))
-  (cdr shortest))
-
-
-;; PUBLIC API
-;;Enqueues quoted form for evaluation in another process. If ret-key and ret-field
-;;are not specified no return values will be provided for the task. Additionally
-;;messaging and message-handlers *DO NOT WORK* in the evaluation process. Communication
-;;must then be handled via ret-key & ret-field, or a user managed place-channel
-(define (go-proc env quoted-form [ret-key #f] [ret-field #f] [place-channel #f])
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-  (when (and (not (boolean? ret-key)) (not (number? ret-key)))
-    (raise-inv-arg "ret-key not a number or #f" ret-key))
-
-  (let ([q-idx (get-min-dp-proc-q-idx env)])
-    (semaphore-wait (get-dp-proc-queue-sem env q-idx))
-    (enqueue! (get-dp-proc-queue env q-idx) (list quoted-form ret-key ret-field place-channel))
-    (semaphore-post (get-dp-proc-queue-sem env q-idx))
-    (thread-resume (get-dp-thread env q-idx))
-    #t))
-
-
-
-
 ;;;----------------------------------------------------------------------------
 ;;; DATA
 ;;;----------------------------------------------------------------------------
 ;; Get the hash of data objects
 (define (get-data-hash env)
-  (vector-ref (vector-ref (unbox-dp-env env) 4) 0))
+  (vector-ref (vector-ref (unbox-dp-env env) 3) 0))
 
 
 ;; Get the data objects semaphore
 (define (get-data-sem env)
-  (vector-ref (vector-ref (unbox-dp-env env) 4) 1))  
+  (vector-ref (vector-ref (unbox-dp-env env) 3) 1))  
 
 
 ;; Get the data object current new key source integer
 (define (get-data-key-src env)
-  (vector-ref (vector-ref (unbox-dp-env env) 4) 2)) 
+  (vector-ref (vector-ref (unbox-dp-env env) 3) 2)) 
 
 
 ;; Set the data object current new key source integer
 (define (set-data-key-src env val)
-  (vector-set! (vector-ref (unbox-dp-env env) 4) 2 val)) 
+  (vector-set! (vector-ref (unbox-dp-env env) 3) 2 val)) 
 
 
 ;; Get the queue of freed data keys
 (define (get-data-free-key-q env)
-  (vector-ref (vector-ref (unbox-dp-env env) 4) 3))
+  (vector-ref (vector-ref (unbox-dp-env env) 3) 3))
 
 
 ;; Add a recycled data object key to the container queue
@@ -790,80 +649,6 @@
 
 
 
-;;; process threads
-;; Return thread's queue index if not empty, otherwise gets the index of the 
-;; fullest queue.
-(define (get-task-proc-q-idx env thread-idx)
-  (let ([thread-queue (get-dp-proc-queue env thread-idx)])
-    (if (equal? (queue-length thread-queue) 0)
-      (let ([highest-idx (get-max-dp-proc-q-idx env)])
-        (if (equal? (queue-length (get-dp-proc-queue env highest-idx)) 0) 
-          #f
-          highest-idx))
-      thread-idx)))
-
-
-;; Return a task from a thread queue to execute
-(define (get-proc-task env thread-idx)
-  (let ([q-idx (get-task-proc-q-idx env thread-idx)])
-    (if (equal? q-idx #f)
-      #f 
-      (let ()
-        (semaphore-wait (get-dp-proc-queue-sem env q-idx))
-        (let ([ret 
-                (if (queue-empty? (get-dp-proc-queue env q-idx))
-                  #f
-                  (dequeue! (get-dp-proc-queue env q-idx)))])
-          (semaphore-post (get-dp-proc-queue-sem env q-idx))
-          ret)))))
-
-
-;; Eternal thread tail recursion of executing external process tasks
-(define (dp-proc-thread env thread-idx) 
-  (with-handlers 
-    ([exn:fail? 
-       (lambda (e)
-         (fprintf 
-           (current-error-port)
-           "dp-proc-thread got error: ~a\n"
-           e)
-         (dp-proc-thread env thread-idx))])
-    (let ([task (get-proc-task env thread-idx)])
-      (if (equal? (car task) #f)
-        (thread-suspend (current-thread))
-        (let ([proc-task (list (car task) (car (cdddr task)))])
-          (let* ([ret (place-channel-put/get 
-                        (get-process-channel env thread-idx) 
-                        proc-task)]
-                 [ret-key (cdr task)]
-                 [ret-field (cddr task)])
-            (if (or
-                  (equal? ret 'died-before-execution)
-                  (equal? ret 'died-during-execution))
-              (let ([error-text (place-channel-get 
-                                  (get-process-channel env thread-idx))])
-                (fprintf 
-                  (current-error-port) 
-                  "Process died: ~a, Error text: ~a\n"
-                  ret 
-                  error-text))
-              (when (and ret-key ret-field)
-                (set-data-field! env ret-key ret-field ret))))))))
-  (dp-proc-thread env thread-idx))
-
-
-;; Thread startup coroutine
-(define (dp-process-thread-start env)
-  (let ([id (current-thread)])
-    (thread-suspend id)
-    (define thread-num 0)
-    (for ([i (get-num-dp-proc-threads env)])
-         (when (equal? (get-dp-thread env i) id) 
-           (set! thread-num i)))
-    (dp-proc-thread env thread-num)))
-
-
-
 ;;;----------------------------------------------------------------------------
 ;;; COMMUNICATION - messaging
 ;;;---------------------------------------------------------------------------- 
@@ -911,12 +696,12 @@
 
 ;; Get the hash of message callback handlers
 (define (get-dp-message-handler-hash env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 0))
+  (vector-ref (vector-ref (unbox-dp-env env) 2) 0))
 
 
 ;; Get the message callback handlers semaphore
 (define (get-dp-message-handler-hash-sem env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 1))
+  (vector-ref (vector-ref (unbox-dp-env env) 2) 1))
 
 
 ;; Get message callback handlers for msg-type and src-key
@@ -1257,21 +1042,13 @@
   (test-section "datapool data constructor, getter, and destructor functions")
   ;Make a datapool
   (let* ([num-threads 2]
-         [num-processes 2]
-         [env (make-datapool num-threads num-processes)]) 
+         [env (make-datapool num-threads)]) 
 
     ;;------------------------------------- 
     ;; check num counts are correct
     (test-equal?
       "number of threads"
       (vector-ref (vector-ref (unbox-dp-env env) 0) 0)
-      2
-      pr
-      wait)
-
-    (test-equal?
-      "number of processes"
-      (vector-ref (vector-ref (unbox-dp-env env) 0) 1)
       2
       pr
       wait)
@@ -1342,114 +1119,6 @@
            pr 
            wait))
 
-    ;;------------------------------------- 
-    ;Verify place channels exist 
-    (for ([i num-processes])
-         (let ([place-channels (vector-ref 
-                                 (vector-ref 
-                                   (vector-ref 
-                                     (unbox-dp-env 
-                                       env) 
-                                     2) 
-                                   i) 
-                                 0)])
-           (let 
-             ([o (open-output-string)])
-             (fprintf o "Local place channel exists for place process ~a" i)
-             (test-true? 
-               (get-output-string o)
-               (place-channel? (car place-channels))
-               pr 
-               wait))
-           (let 
-             ([o (open-output-string)])
-             (fprintf o "Remote place channel exists for place process ~a" i)
-             (test-true? 
-               (get-output-string o)
-               (place-channel? (car (cdr place-channels)))
-               pr 
-               wait))))
-
-    ;Verify place processes exist
-    (for ([i num-processes])
-         (test-true? 
-           "(and make-datapool get-data) verify place processes exist" 
-           (place? 
-             (vector-ref 
-               (vector-ref 
-                 (vector-ref 
-                   (unbox-dp-env 
-                     env) 
-                   2) 
-                 i) 
-               1)) 
-           pr 
-           wait))
-
-    ;Verify process threads exist
-    (for ([i num-processes])
-         (test-true? 
-           "(and make-datapool get-data) verify process threads exist" 
-           (thread? 
-             (vector-ref 
-               (vector-ref 
-                 (vector-ref 
-                   (unbox-dp-env 
-                     env) 
-                   2) 
-                 i) 
-               2)) 
-           pr 
-           wait))
-
-    ;Verify the process threads are alive
-    (for ([i num-processes])
-         (test-true? 
-           "(and make-datapool get-data) verify process threads are alive" 
-           (not 
-             (thread-dead? 
-               (vector-ref
-                 (vector-ref 
-                   (vector-ref 
-                     (unbox-dp-env 
-                       env) 
-                     2) 
-                   i) 
-                 2))) 
-           pr 
-           wait))
-
-    ;Verify process thread task queues exist
-    (for ([i num-processes])
-         (test-true? 
-           "(and make-datapool get-data) verify task queues exist" 
-           (queue? 
-             (vector-ref 
-               (vector-ref 
-                 (vector-ref 
-                   (unbox-dp-env 
-                     env) 
-                   2) 
-                 i) 
-               3)) 
-           pr 
-           wait))
-
-    ;Verify process thread task queue semaphores exist
-    (for ([i num-processes])
-         (test-true? 
-           "(and make-datapool get-data) verify task queue semaphores exist" 
-           (semaphore? 
-             (vector-ref 
-               (vector-ref 
-                 (vector-ref 
-                   (unbox-dp-env 
-                     env) 
-                   2) 
-                 i) 
-               4)) 
-           pr 
-           wait))
 
     ;;-------------------------------------
     ;Verify hash table of message handlers exists
@@ -1460,7 +1129,7 @@
           (vector-ref 
             (unbox-dp-env 
               env) 
-            3) 
+            2) 
           0)) 
       pr 
       wait)
@@ -1473,7 +1142,7 @@
           (vector-ref 
             (unbox-dp-env 
               env) 
-            3) 
+            2) 
           1)) 
       pr 
       wait)
@@ -1487,7 +1156,7 @@
           (vector-ref 
             (unbox-dp-env 
               env) 
-            4) 
+            3) 
           0)) 
       pr 
       wait)
@@ -1500,7 +1169,7 @@
           (vector-ref 
             (unbox-dp-env 
               env) 
-            4) 
+            3) 
           1)) 
       pr 
       wait)
@@ -1513,7 +1182,7 @@
           (vector-ref 
             (unbox-dp-env 
               env) 
-            4) 
+            3) 
           2)) 
       pr 
       wait)
@@ -1526,15 +1195,13 @@
           (vector-ref 
             (unbox-dp-env 
               env) 
-            4) 
+            3) 
           3)) 
       pr 
       wait)
 
-    (printf "1\n")
     ;Verify we can kill the datapool environment
     (close-dp env)
-    (printf "2\n")
 
     (for ([i num-threads])
          (let ([o (open-output-string)])
@@ -1550,41 +1217,6 @@
                      1) 
                    i) 
                  0)) 
-             pr 
-             wait)))
-
-    (for ([i num-processes])
-         (let ([o (open-output-string)])
-           (fprintf o "close-dp process thread ~a" i)
-           (test-true? 
-             (get-output-string o) 
-             (thread-dead? 
-               (vector-ref 
-                 (vector-ref 
-                   (vector-ref 
-                     (unbox-dp-env 
-                       env) 
-                     2) 
-                   i) 
-                 2)) 
-             pr 
-             wait)))
-
-    (for ([i num-processes])
-         (let ([o (open-output-string)])
-           (fprintf o "close-dp place process ~a" i)
-           (test-equal? 
-             (get-output-string o) 
-             (place-wait
-               (vector-ref 
-                 (vector-ref 
-                   (vector-ref 
-                     (unbox-dp-env 
-                       env) 
-                     2) 
-                   i) 
-                 1)) 
-             1 ;expect 'complete value' of 1
              pr 
              wait))))
   ;;**************************************
@@ -1603,21 +1235,13 @@
   ;;--------------------------------------
   (test-section "datapool getters & setters")
   (let* ([num-threads 2]
-         [num-processes 2]
-         [env (make-datapool num-threads num-processes)])
+         [env (make-datapool num-threads)])
 
     ;-------------------------------------- 
     ;verify datapool info is correct
     (test-equal?
       "get-num-dp-threads"
       (get-num-dp-threads env)
-      2
-      pr
-      wait)
-
-    (test-equal?
-      "get-num-dp-proc-threads"
-      (get-num-dp-proc-threads env)
       2
       pr
       wait)
@@ -1670,53 +1294,6 @@
       pr 
       wait)
 
-    ;--------------------------------------
-    ;verify correct num of process threads exist 
-    (test-equal? 
-      "get-num-dp-proc-threads verify correct num of threads exist" 
-      (get-num-dp-proc-threads env) 
-      2 
-      pr 
-      wait)
-
-    ;verify threads exist 
-    (test-true? 
-      "get-dp-proc-thread verify threads exist 1" 
-      (thread? (get-dp-proc-thread env 0)) 
-      pr 
-      wait)
-
-    (test-true? 
-      "get-dp-proc-thread verify threads exist 2" 
-      (thread? (get-dp-proc-thread env 1)) 
-      pr 
-      wait)
-
-    ;verify thread task queues exist
-    (test-true? 
-      "get-dp-proc-queue verify thread task queues exist 1" 
-      (queue? (get-dp-proc-queue env 0)) 
-      pr 
-      wait)
-
-    (test-true? 
-      "get-dp-proc-queue verify thread task queues exist 2" 
-      (queue? (get-dp-proc-queue env 1)) 
-      pr 
-      wait)
-
-    ;verify thread task queues semaphores exist
-    (test-true? 
-      "get-dp-proc-queue-sem verify thread task queues semaphores exist 1" 
-      (semaphore? (get-dp-proc-queue-sem env 0)) 
-      pr 
-      wait)
-
-    (test-true? 
-      "get-dp-proc-queue-sem verify thread task queues semaphores exist 2" 
-      (semaphore? (get-dp-proc-queue-sem env 1)) 
-      pr 
-      wait)
 
     ;--------------------------------------
     ;verify data object hash exists
@@ -1782,8 +1359,7 @@
   ;;--------------------------------------
   (test-section "task queue getters & setters")
   (let* ([num-threads 2]
-         [num-processes 2]
-         [env (make-datapool num-threads num-processes)])
+         [env (make-datapool num-threads)])
 
     ;;Arbitrary coroutine to execute
     (define (test-task) #t)
@@ -1830,8 +1406,7 @@
   ;;--------------------------------------
   (test-section "manage data objects")
   (let* ([num-threads 2]
-         [num-processes 2]
-         [env (make-datapool num-threads num-processes)]) 
+         [env (make-datapool num-threads)]) 
 
     (define test-key 1337)
 
@@ -1948,8 +1523,7 @@
   ;;--------------------------------------
   (test-section "manage message handlers")
   (let* ([num-threads 2]
-         [num-processes 2]
-         [env (make-datapool num-threads num-processes)])
+         [env (make-datapool num-threads)])
 
     ;;TODO:
     ;;     message%
@@ -2041,8 +1615,7 @@
   #|
   (test-section "datapool thread internal functions")
   (let* ([num-threads 2]
-         [num-processes 2]
-         [env (make-datapool num-threads num-processes)])
+         [env (make-datapool num-threads)])
     (define-coroutine (test-task-co)
                       3)
     (define test-task (test-task-co))
@@ -2147,8 +1720,7 @@
   ;;--------------------------------------
   (test-section "go stress test: basic (go) invocations")
   (let* ([num-threads 8]
-         [num-processes 0]
-         [env (make-datapool num-threads num-processes)])
+         [env (make-datapool num-threads)])
 
     (define-coroutine
       (test-ro inp-x)
@@ -2192,8 +1764,7 @@
 
   (test-section "go stress test 2: timing comparisions for addition")
   (let* ([num-threads 8]
-         [num-processes 0]
-         [env (make-datapool num-threads num-processes)])
+         [env (make-datapool num-threads)])
 
     (sleep 0.1)
     (define-coroutine 
@@ -2203,7 +1774,7 @@
     (let ([start-time (current-inexact-milliseconds)]
           [x 8000])
       (for ([i x])
-        (go env (go-return i)))
+           (go env (go-return i)))
       (wait-len env)
       (let ([time (- (current-inexact-milliseconds) start-time)])
         (printf "Benchmark time (milli) for ~a immediately returning (go) operations: ~a\n" x time)
@@ -2278,15 +1849,14 @@
 
     (close-dp env))
   ;;**************************************
-  
+
 
   ;;**************************************
   ;;TEST go stress test 3 ;results of calculation
   ;;--------------------------------------
   (test-section "go stress test 3: collating results")
   (let* ([num-threads 8]
-         [num-processes 0]
-         [env (make-datapool num-threads num-processes)]
+         [env (make-datapool num-threads)]
          [x 1000000]
          [ch (channel)])
     (close-dp env))
@@ -2298,17 +1868,6 @@
   ;;     set-data-field!
   ;;--------------------------------------
 
-  ;;**************************************
-  ;;TEST go-proc
-  ;;--------------------------------------
-
-  ;;**************************************
-  ;;TEST go-proc; stress test
-  ;;--------------------------------------
-
-  ;;**************************************
-  ;;TEST go-proc ;datapool interactions set-data-field! and send-message
-  ;;--------------------------------------
 
   ;;;---------------------------------------------------------------------------- 
   ;;; Feature Tests
