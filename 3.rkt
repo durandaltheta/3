@@ -20,7 +20,7 @@
 
 (provide 
   ;;;DATAPOOL
-  make-datapool ;start a datapool
+  datapool ;start a datapool
   get-num-dp-threads 
   close-dp ;kill all threads and processes in the datapool 
 
@@ -237,7 +237,9 @@
     (when print-result
       (printf (get-output-string o))
       (when wait
-        (read-line (current-input-port) 'any)))
+        (let ()
+          (printf "<enter to continue>")
+          (read-line (current-input-port) 'any))))
     (let ([ret (cons #f (get-output-string o))])
       (collate-test ret)
       ret)))
@@ -334,7 +336,7 @@
 ;;; DATAPOOL
 ;;;----------------------------------------------------------------------------
 ;;create datapool data 
-(define (make-datapool num-threads) 
+(define (datapool num-threads) 
   (let* ([key-src 0]
          [ret
            (box 
@@ -640,7 +642,6 @@
 ;; Thread startup coroutine
 (define (dp-thread-start env)
   (let ([id (current-thread)])
-    (thread-suspend id)
     (define thread-num 0)
     (for ([i (get-num-dp-threads env)])
          (when (equal? (get-dp-thread env i) id) 
@@ -664,10 +665,10 @@
 
 ;; PUBLIC API
 ;; Create a message object 
-(define (message inp-type inp-payload [source-key #f])
+(define (message type content [source-key #f])
   (when (and (not (boolean? source-key)) (not (number? source-key)))
     (raise-inv-arg "source-key not a number or #f" source-key))
-  (make-object message% source-key inp-type inp-payload)) 
+  (make-object message% source-key type content)) 
 
 
 ;; PUBLIC API
@@ -1035,14 +1036,14 @@
 
 
   ;;**************************************
-  ;;TEST make-datapool 
+  ;;TEST datapool 
   ;;     unbox-dp-env 
   ;;     close-dp
   ;;-------------------------------------- 
   (test-section "datapool data constructor, getter, and destructor functions")
   ;Make a datapool
   (let* ([num-threads 2]
-         [env (make-datapool num-threads)]) 
+         [env (datapool num-threads)]) 
 
     ;;------------------------------------- 
     ;; check num counts are correct
@@ -1057,7 +1058,7 @@
     ;Verify threads exist
     (for ([i num-threads])
          (test-true? 
-           "(and make-datapool get-data) verify threads exist" 
+           "(and datapool get-data) verify threads exist" 
            (thread? 
              (vector-ref 
                (vector-ref 
@@ -1073,7 +1074,7 @@
     ;Verify the threads are alive
     (for ([i num-threads])
          (test-true? 
-           "(and make-datapool get-data) verify threads are alive" 
+           "(and datapool get-data) verify threads are alive" 
            (not 
              (thread-dead? 
                (vector-ref
@@ -1090,7 +1091,7 @@
     ;Verify thread task queues exist
     (for ([i num-threads])
          (test-true? 
-           "(and make-datapool get-data) verify task queues exist" 
+           "(and datapool get-data) verify task queues exist" 
            (queue? 
              (vector-ref 
                (vector-ref 
@@ -1106,7 +1107,7 @@
     ;Verify thread task queue semaphores exist
     (for ([i num-threads])
          (test-true? 
-           "(and make-datapool get-data) verify task queue semaphores exist" 
+           "(and datapool get-data) verify task queue semaphores exist" 
            (semaphore? 
              (vector-ref 
                (vector-ref 
@@ -1123,7 +1124,7 @@
     ;;-------------------------------------
     ;Verify hash table of message handlers exists
     (test-true? 
-      "(and make-datapool get-data) verify message handler hash table exists" 
+      "(and datapool get-data) verify message handler hash table exists" 
       (hash? 
         (vector-ref 
           (vector-ref 
@@ -1136,7 +1137,7 @@
 
     ;Verify message hash table semaphore exists
     (test-true? 
-      "(and make-datapool get-data) verify message handlers hash table semaphore exists" 
+      "(and datapool get-data) verify message handlers hash table semaphore exists" 
       (semaphore? 
         (vector-ref 
           (vector-ref 
@@ -1150,7 +1151,7 @@
     ;;-------------------------------------
     ;Verify hash table of data objects exists
     (test-true? 
-      "(and make-datapool get-data) verify hash table of data objects exists" 
+      "(and datapool get-data) verify hash table of data objects exists" 
       (hash? 
         (vector-ref 
           (vector-ref 
@@ -1163,7 +1164,7 @@
 
     ;Verify hash table semaphore exists
     (test-true? 
-      "(and make-datapool get-data) verify data object hash table semaphore exists" 
+      "(and datapool get-data) verify data object hash table semaphore exists" 
       (semaphore? 
         (vector-ref 
           (vector-ref 
@@ -1176,7 +1177,7 @@
 
     ;Verify data object key source variable exists
     (test-true? 
-      "(and make-datapool get-data) verify data object key source variable exists" 
+      "(and datapool get-data) verify data object key source variable exists" 
       (number? 
         (vector-ref 
           (vector-ref 
@@ -1189,7 +1190,7 @@
 
     ;Verify data object freed key queue exists
     (test-true? 
-      "(and make-datapool get-data) verify data object freed key queue exists" 
+      "(and datapool get-data) verify data object freed key queue exists" 
       (queue? 
         (vector-ref 
           (vector-ref 
@@ -1235,7 +1236,7 @@
   ;;--------------------------------------
   (test-section "datapool getters & setters")
   (let* ([num-threads 2]
-         [env (make-datapool num-threads)])
+         [env (datapool num-threads)])
 
     ;-------------------------------------- 
     ;verify datapool info is correct
@@ -1359,7 +1360,7 @@
   ;;--------------------------------------
   (test-section "task queue getters & setters")
   (let* ([num-threads 2]
-         [env (make-datapool num-threads)])
+         [env (datapool num-threads)])
 
     ;;Arbitrary coroutine to execute
     (define (test-task) #t)
@@ -1406,7 +1407,7 @@
   ;;--------------------------------------
   (test-section "manage data objects")
   (let* ([num-threads 2]
-         [env (make-datapool num-threads)]) 
+         [env (datapool num-threads)]) 
 
     (define test-key 1337)
 
@@ -1433,67 +1434,6 @@
     (set-field! 3-field (get-data env test-key) 2)
     (test-equal? "set-field succeeded?" (get-field 3-field (get-data env test-key)) 2 pr wait) 
 
-    #|
-    (with-handlers 
-      ([exn:fail? 
-         (lambda (e)
-           (test-pass 
-             "register-data! number correctly fails" 
-             3
-             pr)
-           (abort-current-continuation (default-continuation-prompt-tag) void))])
-      (register-data! env 3)
-      (test-fail 
-        "register-data! number incorrectly succeeds" 
-        3
-        pr 
-        wait))
-
-    (with-handlers 
-      ([exn:fail? 
-         (lambda (e)
-           (test-pass 
-             "register-data! string correctly fails" 
-             "\"3\""
-             pr)
-           (abort-current-continuation (default-continuation-prompt-tag) void))])
-      (register-data! env "3")
-      (test-fail 
-        "register-data! string incorrectly succeeds" 
-        "\"3\""
-        pr 
-        wait))
-
-    (with-handlers 
-      ([exn:fail? 
-         (lambda (e)
-           (test-pass 
-             "register-data! list correctly fails" 
-             "(list 3)"
-             pr)
-           (abort-current-continuation (default-continuation-prompt-tag) void))])
-      (register-data! env (list 3))
-      (test-fail 
-        "register-data! list incorrectly succeeds" 
-        "(list 3)"
-        pr 
-        wait))
-
-    (with-handlers 
-      ([exn:fail? 
-         (lambda (e)
-           (test-pass 
-             "register-data! quote correctly fails" 
-             '(3)
-             pr)
-           (abort-current-continuation (default-continuation-prompt-tag) void))])
-      (register-data! env '(3))
-      (test-fail 
-        "register-data! quote incorrectly succeeds" 
-        '(3)
-        pr 
-        wait))
-    |#
 
     (let ([hash-size (hash-count (get-data-hash env))])
       (let ([key (register-data! env test-object)])
@@ -1523,14 +1463,15 @@
   ;;--------------------------------------
   (test-section "manage message handlers")
   (let* ([num-threads 2]
-         [env (make-datapool num-threads)])
+         [env (datapool num-threads)])
+    (let*
+      ([test-type 'test-type]
+       [test-content "hello world"]
+       [test-msg (message test-type test-content)])
+      (test-equal? "can get message's type" (message-type test-msg) test-type pr wait)
+      (test-equal? "can get message's content" (message-content test-msg) test-content pr wait)
+      (test-equal? "can get message's source" (message-source test-msg) #f pr wait))
 
-    ;;TODO:
-    ;;     message%
-    ;;     message 
-    ;;     message-type 
-    ;;     message-source
-    ;;     message-content 
 
     (test-true? "get-dp-message-handler-hash" (hash? (get-dp-message-handler-hash env)) pr wait)
     (test-true? "get-dp-message-handler-hash-sem" (semaphore? (get-dp-message-handler-hash-sem env)) pr wait)
@@ -1604,18 +1545,17 @@
     (close-dp env))
   ;;**************************************
 
+
   ;;**************************************
   ;;TEST get-task-q-idx
   ;;     get-task
   ;;     dp-thread-exec-task
   ;;     dp-thread
   ;;     dp-thread-start
-  ;;     go
   ;;-------------------------------------- 
-  #|
   (test-section "datapool thread internal functions")
   (let* ([num-threads 2]
-         [env (make-datapool num-threads)])
+         [env (datapool num-threads)])
     (define-coroutine (test-task-co)
                       3)
     (define test-task (test-task-co))
@@ -1639,53 +1579,12 @@
 
     (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 0 pr wait)
     (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
-
     (let ([len-0 (queue-length (get-dp-queue env 0))]
           [task (get-task env 0)])
       (test-true? "get-task" (> len-0 (queue-length (get-dp-queue env 0))) pr wait))
-
-    (define inp-vals (list 'test 'test2 #f "teststring"))
-    (define ch (channel))
-    (define-coroutine (test-task-co2 ch vals)
-                      (for ([val vals])
-                           (let ()
-                             (printf "Putting ~a in channel\n" val)
-                             (ch-put ch val))))
-    (go env (test-task-co2 ch inp-vals))
-
-    (sleep 0.1)
-    (for ([i num-threads])
-         (printf "\n--- tests for thread ~a ---\n" i)
-         (test-true? "Check if dp thread is not dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
-         (test-true? "Check if dp thread is not running" (not (thread-running? (get-dp-thread env 1))) pr wait)
-         (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
-
-
-    (printf "\n")
-    (for ([i (length inp-vals)])
-         (let ([val (list-ref inp-vals i)]
-               [ret (ch-get ch inp-vals)])
-           (test-equal? "Did expected val get placed in channel" ret val pr wait)))
-
-
-    (define inp-vals2 (list 'test3 'test4 #t "teststring2"))
-    (go env (test-task-co2 ch inp-vals2))
-    (sleep 0.1)
-
-    (for ([i num-threads])
-         (printf "\n--- tests for thread ~a ---\n" i)
-         (test-true? "Check if dp thread is dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
-         (test-true? "Check if dp thread is actively running" (not (thread-running? (get-dp-thread env 1))) pr wait)
-         (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
-
-    (printf "\n")
-    (for ([i (length inp-vals2)])
-         (let ([val (list-ref inp-vals2 i)]
-               [ret (ch-get ch #f)])
-           (test-equal? "Did expected val get placed in channel" ret val pr wait)))
     (close-dp env))
-  |#
   ;;**************************************
+
 
   ;wait until total task queue lengths == 0
   (define (wait-len env)
@@ -1715,12 +1614,68 @@
   (define (iterations-per-second milli iter)
     (/ iter (/ milli 1000)))
 
+
+  ;;**************************************
+  ;;TEST go
+  ;;-------------------------------------- 
+  (test-section "go")
+  (let* ([num-threads 2]
+         [env (datapool num-threads)])
+
+    (let 
+      ([inp-vals (list 'test 'test2 #f "teststring")]
+       [ch (channel)]
+       [inp-vals2 (list 'test3 'test4 #t "teststring2")])
+
+      (define-coroutine 
+        (test-task-co2 ch vals)
+        (for ([val vals])
+             (let ()
+               (printf "Putting ~a in channel\n" val)
+               (ch-put ch val))))
+
+      (go env (test-task-co2 ch inp-vals))
+
+      (sleep 0.1)
+      (wait-len env)
+      (for ([i num-threads])
+           (printf "\n--- tests for thread ~a ---\n" i)
+           (test-true? "Check if dp thread is not dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
+           (test-true? "Check if dp thread is not running" (not (thread-running? (get-dp-thread env 1))) pr wait)
+           (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
+
+
+      (printf "\n")
+      (for ([i (length inp-vals)])
+           (let ([val (list-ref inp-vals i)]
+                 [ret (ch-get ch inp-vals)])
+             (test-equal? "Did expected val get placed in channel" ret val pr wait)))
+
+
+      (go env (test-task-co2 ch inp-vals2))
+      (sleep 0.1)
+
+      (for ([i num-threads])
+           (printf "\n--- tests for thread ~a ---\n" i)
+           (test-true? "Check if dp thread is dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
+           (test-true? "Check if dp thread is actively running" (not (thread-running? (get-dp-thread env 1))) pr wait)
+           (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
+
+      (printf "\n")
+      (for ([i (length inp-vals2)])
+           (let ([val (list-ref inp-vals2 i)]
+                 [ret (ch-get ch #f)])
+             (test-equal? "Did expected val get placed in channel" ret val pr wait))))
+    (close-dp env))
+  ;;**************************************
+
+
   ;;**************************************
   ;;TEST go ;stress test
   ;;--------------------------------------
   (test-section "go stress test: basic (go) invocations")
   (let* ([num-threads 8]
-         [env (make-datapool num-threads)])
+         [env (datapool num-threads)])
 
     (define-coroutine
       (test-ro inp-x)
@@ -1764,7 +1719,7 @@
 
   (test-section "go stress test 2: timing comparisions for addition")
   (let* ([num-threads 8]
-         [env (make-datapool num-threads)])
+         [env (datapool num-threads)])
 
     (sleep 0.1)
     (define-coroutine 
@@ -1856,7 +1811,7 @@
   ;;--------------------------------------
   (test-section "go stress test 3: collating results")
   (let* ([num-threads 8]
-         [env (make-datapool num-threads)]
+         [env (datapool num-threads)]
          [x 1000000]
          [ch (channel)])
     (close-dp env))
@@ -1873,7 +1828,7 @@
   ;;; Feature Tests
   ;;;---------------------------------------------------------------------------- 
   ;TODO figure out how to get argv & argc 
-  ;(define dp1 (make-datapool 4 '(main argv argc)))
+  ;(define dp1 (datapool 4 '(main argv argc)))
   ;(let ([ch (get-datapool-input-channel dp1)]) 
   ;(ch-get ch))
 
