@@ -36,13 +36,14 @@
   ;;;DATA
   register-data! ;register given object in the datapool
   delete-data! ;delete object and all callbacks pointing to it via its key
+  get-data ;get whatever data is in the data hash at provided key
   get-data-field ;get the value of a registered object's field
   set-data-field! ;set a registered object's field via its key 
 
   ;;;MESSAGING
   message ;create a message object with a given type and content payload
   message-type ;return a message's type
-  message-content ;return a message's payload 
+  message-content ;return a message's content payload 
   message-source ;return a message's source key
   register-message-handler ;register a coroutine procedure that is called when a message with corresponding message-type and source-key 
   send-message ;send a message object to registered message handlers
@@ -521,12 +522,7 @@
 
 ;; PUBLIC API
 ;; Redefine data object field)
-(define (set-data-field! env key val field)
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-  (when (and (not (boolean? key)) (not (number? key)))
-    (raise-inv-arg "key not a number or #f" key))
-
+(define (set-data-field! env key field val)
   (let ([data (get-data env key)])
     (if data 
       (let ()
@@ -555,8 +551,6 @@
 (define (register-data! env data)
   (when (not (vector? (unbox-dp-env env)))
     (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-  (when (not (object? data))
-    (raise-inv-arg "data not an object" data))
 
   (let ([key (gen-dp-data-obj-key env)])
     (if (not (get-data env key)) ;don't hash if data exists 
@@ -660,7 +654,7 @@
          (init-field
            src
            type
-           payload)))
+           content)))
 
 
 ;; PUBLIC API
@@ -684,7 +678,7 @@
 (define (message-content msg)
   (when (not (object? msg))
     (raise-inv-arg "msg not an object" msg))
-  (get-field payload msg))
+  (get-field content msg))
 
 
 ;; PUBLIC API
@@ -780,6 +774,7 @@
           [src-key #f] 
           [ret-key #f] 
           [ret-field #f])
+  (printf "rmh1\n")
   (when (not (vector? (unbox-dp-env env)))
     (raise-inv-arg "env not a vector" (unbox-dp-env env)))
   (when (and (not (boolean? src-key)) (not (number? src-key)))
@@ -787,11 +782,19 @@
   (when (and (not (boolean? ret-key)) (not (number? ret-key)))
     (raise-inv-arg "ret-key not a number or #f" ret-key))
 
+  (printf "rmh2\n")
   (let ([msg-handlers (get-dp-message-handlers env msg-type src-key)])
-    (set-dp-message-handlers! 
-      env 
-      msg-type 
-      (append msg-handlers (list (list coroutine-procedure ret-key ret-field))))
+    (if msg-handlers
+      (set-dp-message-handlers! 
+        env 
+        msg-type 
+        src-key
+        (append msg-handlers (list (list coroutine-procedure ret-key ret-field))))
+      (set-dp-message-handlers! 
+        env 
+        msg-type 
+        src-key
+        (list (list coroutine-procedure ret-key ret-field))))
     #t))
 
 
@@ -1525,23 +1528,97 @@
                           wait))))
 
     (define test-class%
-      (class object% (super-new)
-             (field [3-field 3])
-             (define/public (get-3) 3-field)))
+      (class object% 
+             (super-new)
+             (field [test-field 3])
+             (field [test-field2 2])
+             (define/public (get-test-field-id) test-field)
+             (define/public (get-test-field2-id) test-field2)))
 
     (define test-object (make-object test-class%))
 
-    ;;TODO:
-    ;;     register-message-handler 
-    ;;     delete-data! (make sure message handler is removed)
-
     (let ([hash-size (hash-count (get-data-hash env))])
-      (let ([key (register-data! env test-object)])
-        (test-equal? "register-data! object succeeds" key 0 pr wait)
-        (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) (+ hash-size 1) pr wait)
-        (test-true? "delete-data!" (delete-data! env key) pr wait)
+      (let ([test-key (register-data! env test-object)])
+        (test-equal? "register-data! object succeeds" test-key 0 pr wait)
+        (test-equal? 
+          "get-data-hash hash-count" 
+          (hash-count (get-data-hash env)) 
+          (+ hash-size 1) 
+          pr 
+          wait)
+
+        (printf "1\n")
+        (define-coroutine
+          (msg-handler msg)
+          (let*
+            ([cont (message-content msg)]
+             [env (car cont)]
+             [ch (cdar cont)]
+             [val (cddar cont)]
+             [data-test-key (cdddar cont)]
+             [test-field (send (get-data env test-key) get-test-field-id)]
+             [test-field2 (send (get-data env test-key) get-test-field2-id)])
+            (ch-put ch val)
+            (set-data-field! env data-test-key test-field (+ val 1))
+            (+ val 2)))
+
+        (printf "2\n")
+        (let
+          ([test-msg-type 'test-type]
+           [ch (channel)]
+           [test-val 4]
+           [test-field (send (get-data env test-key) get-test-field-id)]
+           [test-field2 (send (get-data env test-key) get-test-field2-id)])
+
+          (printf "3\n")
+          ;(register-message-handler 
+          ;  env 
+          ;  coroutine-procedure 
+          ;  msg-type 
+          ;  [src-key #f] 
+          ;  [ret-key #f] 
+          ;  [ret-field #f])
+          (register-message-handler env msg-handler test-msg-type #f test-key test-field2)
+
+          (printf "4\n")
+          (test-equal? 
+            "get-dp-message-handler-hash hash-count" 
+            (hash-count (get-dp-message-handler-hash env)) 
+            1
+            pr
+            wait)
+          (printf "5\n")
+
+          (send-message env (message test-msg-type (list env ch test-val test-key)) #f)
+          (sleep 0.1)
+
+          (test-equal? "ch has expected value" (ch-get ch) test-val pr wait)
+
+          (test-equal? 
+            "data test-field has expected value" 
+            (get-data-field env test-key test-field)
+            (+ test-val 1)
+            pr
+            wait)
+
+          (test-equal? 
+            "data test-field2 has expected value" 
+            (get-data-field env test-key test-field2)
+            (+ test-val 2)
+            pr
+            wait))
+
+
+        (test-true? "delete-data!" (delete-data! env test-key) pr wait)
         (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) hash-size pr wait)
-        (test-true? "get-data fails" (not (get-data env key)) pr wait)))
+
+        (test-equal? 
+          "get-dp-message-handler-hash hash-count" 
+          (hash-count (get-dp-message-handler-hash env)) 
+          0
+          pr
+          wait)
+        (test-true? "get-data fails" (not (get-data env test-key)) pr wait)))
     (close-dp env))
   ;;**************************************
 
