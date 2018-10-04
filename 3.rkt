@@ -10,13 +10,18 @@
 ;;;;Computation wants to be asynchronous and seamless
 
 ;;;TODO:
-;;; 1. separate datapool into datapool and computepool
-;;; 2. convert pools to structs
-;;; 3. parallel place debugging
-;;; 4. finish basic unit tests (including removed tests)
-;;; 5. investigate and implement error handling correctly
-;;; 6. expand unit tests to test edge-case inputs
-;;; 7. optimize: yield, datapool/computepool structure, threading
+;;; 1. finish basic unit tests (including removed tests and feature tests)
+;;; 2. investigate and implement error handling correctly
+;;; 3. expand unit tests to test edge-case inputs
+;;; 4. optimize: yield, datapool structure, threading
+
+;;;NEXTGEN TODO:
+;;; 1. Put everything in structs to make internal implementation less brittle
+;;; 2. Implement coroutine scheduler thread (sends signal to thread running oldest coroutine to (yield) when there are tasks waiting in the queues and no new task has been taken from a queue in x milli)
+;;; 3. Improve (go) efficiency
+;;; 4. Possibly improve hash and/or queue efficiency
+;;; 5. Implement improvements based on feedback
+;;; 6. Convert to C library (requires custom code for several components not supported by out of the box C)
 
 (provide 
   ;;;DATAPOOL
