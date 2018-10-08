@@ -7,7 +7,7 @@
 
 ;;;;Data wants to be structured and stateful 
 ;;;;Functions want to be functional and stateless
-;;;;Computation wants to be asynchronous and seamless
+;;;;Computation wants to be fast, efficient, asynchronous and seamless
 
 ;;;TODO:
 ;;; 1. finish basic unit tests (including removed tests and feature tests)
@@ -348,7 +348,9 @@
            (box 
              (vector  
                (vector ;datapool info vector 
-                 num-threads)
+                 num-threads
+                 (make-queue) ;queue of threads waiting to invoke (go)
+                 (make-semaphore 1)) ;sem for sleeping thread queue
                (make-vector ;threads, queues, and semaphores
                  num-threads)
                (vector ;message handler vector
@@ -381,6 +383,20 @@
   (when (not (vector? (unbox-dp-env env)))
     (raise-inv-arg "env not a vector" (unbox-dp-env env)))
   (vector-ref (vector-ref (unbox-dp-env env) 0) 0))
+
+
+;; Return queue of sleeping threads waiting to invoke (go)
+(define (get-waiting-threads-queue env) 
+  (when (not (vector? (unbox-dp-env env)))
+    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
+  (vector-ref (vector-ref (unbox-dp-env env) 0) 1))
+
+
+;; Return queue of sleeping threads waiting to invoke (go)
+(define (get-waiting-threads-queue-sem env) 
+  (when (not (vector? (unbox-dp-env env)))
+    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
+  (vector-ref (vector-ref (unbox-dp-env env) 0) 2))
 
 
 ;; PUBLIC API
@@ -456,6 +472,23 @@
     (raise-inv-arg "suspended-coroutine not a coroutine" suspended-coroutine))
 
   (let ([q-idx (get-min-dp-q-idx env)])
+    ;put current thread to sleep if not a datapool worker thread and trying to 
+    ;add too many (go) invocations, wait till queue empties a bit so as to not 
+    ;continuously increase the size of the queues (can massively slow down 
+    ;program execution)
+    (let ([self (current-thread)]
+          [num-threads (get-num-dp-threads env)]
+          [datapool-worker #f])
+      (for ([i num-threads])
+           (when (equal? self (get-dp-thread env i))
+             (set! datapool-worker #t)))
+
+      (when (not datapool-worker)
+        (when (> (queue-length (get-dp-queue env q-idx)) 255)
+          (semaphore-wait (get-waiting-threads-queue-sem env))
+          (enqueue! (get-waiting-threads-queue env) self)
+          (semaphore-post (get-waiting-threads-queue-sem env))
+          (thread-suspend self))))
     (semaphore-wait (get-dp-queue-sem env q-idx))
     (enqueue! (get-dp-queue env q-idx) (list suspended-coroutine ret-key ret-field))
     (semaphore-post (get-dp-queue-sem env q-idx))
@@ -640,6 +673,15 @@
               env 
               thread-idx 
               task)))))
+
+  (when (> (queue-length (get-waiting-threads-queue env)) 0)
+    (semaphore-wait (get-waiting-threads-queue-sem env))
+    (let ([thread (dequeue! (get-waiting-threads-queue env))])
+      (when (not (thread-dead? thread)) ;throw out any dead threads
+        (if (not (thread-running? thread))
+            (thread-resume thread) ;resume thread waiting to invoke (go)
+            (enqueue! (get-waiting-threads-queue env))))) ;thread not ready to resume
+    (semaphore-post (get-waiting-threads-queue-sem env)))
   (dp-thread env thread-idx))
 
 
@@ -1864,13 +1906,62 @@
 
 
   ;;**************************************
-  ;;TEST go stress test 3 ;results of calculation
+  ;;TEST go stress test 3: collating results
   ;;--------------------------------------
   (test-section "go stress test 3: collating results")
   (let* ([num-threads 8]
          [env (datapool num-threads)]
-         [x 1000000]
+         [x 100000]
          [ch (channel)])
+
+    ;collate results in a channel
+    (define-coroutine
+      (collate-coroutine ch val)
+      (if (equal? val 0) 
+          (ch-put ch val)
+          (ch-put ch (+ (ch-get ch) val))))
+
+    (let ([start-time (current-inexact-milliseconds)])
+      (for ([i x]) 
+           (let ()
+             (when (equal? 0 (remainder i 10000))
+               (printf "enqueued (go)[~a]\n" i))
+             (go env (collate-coroutine ch i))))
+      (wait-len env)
+      (let ([time (- (current-inexact-milliseconds) start-time)])
+        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared channel: ~a\n"  x 1 num-threads time)
+        (printf "go invocations per second: ~a\n\n" (iterations-per-second time x))))
+
+    ;collate results in the data hash
+    (define collate-class%
+      (class object% 
+             (super-new)
+             (field [val 0])))
+
+    (define collate-object (make-object collate-class%))
+
+    (define-coroutine
+      (ret-val-coroutine val)
+      val)
+
+    (let ([obj-key (register-data! env collate-object)]
+          [start-time (current-inexact-milliseconds)])
+      (for ([i x]) 
+           (let ()
+             (when (equal? 0 (remainder i 100000))
+               (printf "completing data collate (go)[~a]\n" i))
+             (go env (ret-val-coroutine ch i) obj-key 'val)))
+      (wait-len env)
+      (let ([time (- (current-inexact-milliseconds) start-time)])
+        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared hashed object's field: ~a\n"  x 1 num-threads 8 time))
+
+      (test-true? 
+        "Nonzero val stored in shared data object" 
+        (> (get-data-field env obj-key 'val) 0)
+        pr 
+        wait)
+      (printf "Val stored in shared data object: ~a\n" (get-data-field env obj-key 'val)))
+
     (close-dp env))
   ;;--------------------------------------
 
@@ -1892,6 +1983,11 @@
   ;(define dp1 (datapool 4 '(main argv argc)))
   ;(let ([ch (get-datapool-input-channel dp1)]) 
   ;(ch-get ch))
+  (test-section "Feature Tests")
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (close-dp env))
+  ;;;---------------------------------------------------------------------------- 
 
 
   ;;;---------------------------------------------------------------------------- 
