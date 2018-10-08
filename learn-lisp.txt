@@ -82,7 +82,7 @@ like a binary tree that can bind together any child lists:
     ;above, where each newline is going into a new child cons cell scope and 
     ;each line points to a child cons cell.
     (                              . (               . 3))
-                  /                        \ 
+                  /                        /
      (1 .                        )   (list 4 5 6)
                     \
           (         . "a string")
@@ -162,7 +162,7 @@ parent tree:
 
     ;create a list scope and declare any number of variables in the first 
     ;argument cell. '[ ]' is functionly identically to '( )' and are used in 
-    ;special places to help improve readability var1 and var2 will disapear 
+    ;special places to help improve readability. var1 and var2 will disapear 
     ;when we leave the (let) scope
     (let ([var1 val1] [var2 val2]) do-things-with-var1-and-var2-here) 
 
@@ -206,6 +206,7 @@ shorthand non-parenthesis enclosed keywords but they are the exception.
 
 THE POWER OF LISP
 
+1) The power of the cons cell:
 Understanding the power of Lisp comes from understanding how having an 
 impressively flexible and dynamic struct (the cons cell) as the basis of the 
 language enables expression of other code. For instance, because of the 
@@ -219,11 +220,13 @@ executable code *as text* but get the speed of memory mapped structures!
 (obviously the initial (eval) is slow, but evaluated code can stay in memory 
 and be subsequently used at maximum speed).
 
+2) The power of macros:
 Another form the power of cons cells and runtime interpretation takes is that 
 macros are far *far* more powerful in Lisp than in other languages because the 
 code can be transformed and run *during* runtime (as opposed to before the 
 compilation process, as in C).
 
+3) Dynamic typing:
 Lisp is also a dynamically typed language by default, meaning that a variable's 
 type is determined at runtime. (Lisp did it 30 years before Python!). This 
 helps make writing code easier, as the programmer is more free to write their 
@@ -231,6 +234,7 @@ code via intent rather than spending a lot of time working out and managing
 types.  Most lisps, however, do support optional typing systems, sometimes more
 than one! 
 
+4) Dynamic human interaction via the REPL:
 Lisps all share a common dynamic execution environment called the REPL 
 (Read-eval-print-loop) which allows the user to write and evaluate new code at 
 runtime. It functions very similiarly to Python's interpreter. To read a story 
@@ -238,6 +242,7 @@ on the amazing power of the REPL in combination with the above where the JPL
 fixed a coding error in a rocket flight control system *IN FLIGHT*: 
 http://www.flownet.com/gat/jpl-lisp.html
 
+5) Freeform naming:
 As a side note variable names in Lisp are very unrestricted. In fact, the 
 naming is *so* free that most Lisps support naming conventions just to help 
 readability. The following are all valid names:
@@ -249,6 +254,7 @@ foo*
 +foo+
 %foo
 
+6) Readability
 Another Lisp advantage is it's simple structure lends itself to readability in
 my opinion. The reason for this is a combination of the standard indenting 
 process (2 spaces per new scope on a newline OR if the newline is not on a new
