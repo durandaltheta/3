@@ -39,9 +39,10 @@
   go ;place a coroutine in a queue to be executed by a thread 
 
   ;;;DATA
-  register-data! ;register given object in the datapool
+  define-data! ;register given object in the datapool
   delete-data! ;delete object and all callbacks pointing to it via its key
   get-data ;get whatever data is in the data hash at provided key
+  set-data! ;redefine whatever data is in the data hash at the provided key to the provided value
   get-data-field ;get the value of a registered object's field
   set-data-field! ;set a registered object's field via its key 
 
@@ -50,7 +51,8 @@
   message-type ;return a message's type
   message-content ;return a message's content payload 
   message-source ;return a message's source key
-  register-message-handler ;register a coroutine procedure that is called when a message with corresponding message-type and source-key 
+  define-message-handler ;register a coroutine procedure that is called when a message with corresponding message-type and source-key 
+  data-changed-type ;get the message type used for a specific data being changed in the data hash, used for setting up message handlers when data changes
   send-message ;send a message object to registered message handlers
 
   ;;;TESTING
@@ -323,18 +325,14 @@
 
 ;;channel get, blocks by default
 (define (ch-get ch [block #t])
-  (if (place-channel? ch)
-      (place-channel-get ch)
-      (if block
-          (async-channel-get ch)
-          (async-channel-try-get ch))))
+  (if block
+      (async-channel-get ch)
+      (async-channel-try-get ch)))
 
 
 ;;channel put
 (define (ch-put ch item)
-  (if (place-channel? ch)
-      (place-channel-put ch item)
-      (async-channel-put ch item)))
+  (async-channel-put ch item))
 
 
 
@@ -380,31 +378,22 @@
 ;; PUBLIC API
 ;; Return number of threads in the datapool
 (define (get-num-dp-threads env) 
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
   (vector-ref (vector-ref (unbox-dp-env env) 0) 0))
 
 
 ;; Return queue of sleeping threads waiting to invoke (go)
 (define (get-waiting-threads-queue env) 
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
   (vector-ref (vector-ref (unbox-dp-env env) 0) 1))
 
 
 ;; Return queue of sleeping threads waiting to invoke (go)
 (define (get-waiting-threads-queue-sem env) 
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
   (vector-ref (vector-ref (unbox-dp-env env) 0) 2))
 
 
 ;; PUBLIC API
 ;;kill all threads and processes in a datapool
 (define (close-dp env)
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-
   ;kill threads
   (for ([i (get-num-dp-threads env)])
        (kill-thread (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) i) 0))))
@@ -455,17 +444,36 @@
 
 
 ;; PUBLIC API
-;;Enqueues coroutine instance to the emptiest thread queue and resumes the 
-;;thread. Ret-key and ret-field are optional arguments that tell the thread 
-;;what to do with the value returned at the end of coroutine execution.
+;; Enqueues coroutine instance to the emptiest thread queue and resumes the 
+;; thread. return-key-field-list is an optional argument where the user can 
+;; specify a list of grouped keywords and arguments to determine how the 
+;; returned values are stored.
 ;;
-;;(if (and ret-key ret-field)) attempts to (send ret-field (unbox-dp-env env ret-key) return-value)
-;;(if (and ret-key (not ret-field)) attempts to (set-dp-data! env ret-key return-value)
-(define (go env suspended-coroutine [ret-key #f] [ret-field #f])
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-  (when (and (not (boolean? ret-key)) (not (number? ret-key)))
-    (raise-inv-arg "ret-key not a number or #f" ret-key))
+;; Example, if example-coroutine returns 2 values you can store them in the 
+;; datapool environment thus:
+;; (go env example-coroutine (list (list '#:data key1 'field1)
+;;                                 (list '#:data key2 'field2)))
+;;
+;;
+;; return-destinations accepts the following keywords with argument groups:
+;; '#:message type source
+;; '#:channel channel
+;; '#:data key field ;if field is #f then the data at the provided key will be 
+;;                   ;overwritten with the return value rather than modifying an 
+;;                   ;object's field
+;;
+;; The actual values provided for each message/data/data-field/channel handler 
+;; are the list of return values from the (go) function handled in the order 
+;; received. If a return value is equal to '#:invalid, then that value's
+;; destination handler is skipped.
+;;
+;; Valid return-destinations examples:
+;; (list (list '#:data key field) (list '#:message type source))
+;; (list (list '#:channel ch1) (list '#:channel ch2))
+;; (list (list '#:data key1 field1) 
+;;       (list '#:data key2 field2) 
+;;       (list '#:message type source))
+(define (go env suspended-coroutine [return-destinations #f])
   (when (not (procedure? suspended-coroutine))
     (raise-inv-arg "suspended-coroutine not a procedure" suspended-coroutine))
   (when (not (equal? (suspended-coroutine 'coroutine?) 'coroutine))
@@ -490,7 +498,8 @@
           (semaphore-post (get-waiting-threads-queue-sem env))
           (thread-suspend self))))
     (semaphore-wait (get-dp-queue-sem env q-idx))
-    (enqueue! (get-dp-queue env q-idx) (list suspended-coroutine ret-key ret-field))
+    (enqueue! (get-dp-queue env q-idx) (list suspended-coroutine 
+                                             return-key-field-list))
     (semaphore-post (get-dp-queue-sem env q-idx))
     (thread-resume (get-dp-thread env q-idx))
     #t))
@@ -539,68 +548,408 @@
         ret)))
 
 
+;; PUBLIC API
 ;; Get a data object reference from the hash
 (define (get-data env key)
-  (hash-ref (get-data-hash env) key #f))
+  (hash-ref (get-data-hash env) key 'not-found))
 
 
 ;; PUBLIC API
 ;; Get the value of a data object's field
 (define (get-data-field env key field)
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-  (when (and (not (boolean? key)) (not (number? key)))
-    (raise-inv-arg "key not a number or #f" key))
-
   (let ([data (get-data env key)])
-    (if data 
+    (if (not (equal? data 'not-found))
         (let 
-          ([ret 'no-object])
+          ([ret 'not-found])
           (semaphore-wait (get-data-sem env))
           (set! ret (dynamic-get-field field data))
           (semaphore-post (get-data-sem env))
           ret)
-        'no-object)))
+        data)))
+
+
+;; PUBLIC API 
+;; get the message type used for when a specific data key is changed in the 
+;; data hash, used for setting up message handlers when data changes:
+;;
+;; (define-message-handler 
+;;   example-env 
+;;   example-handler 
+;;   (data-changed-type example-key 'example-field)                  ;<== when we get this message 
+;;   #f                                                              ;<== from this source
+;;   (list (list example-input-key 'example-input-field))            ;<== give these data values (and the message) as input into example-handler
+;;   (list (list '#:data ex-destination-key 'ex-destination-field))) ;<== use these to direct where the output from example-handler is stored
+(define (data-changed-type key [field #f])
+  (if field
+      `data-,key-,field-changed
+      `data-,key-changed))
 
 
 ;; PUBLIC API
 ;; Redefine data object field)
 (define (set-data-field! env key field val)
   (let ([data (get-data env key)])
-    (if data 
+    (if (not (equal? data 'not-found))
         (let ()
           (semaphore-wait (get-data-sem env))
           (dynamic-set-field! field (get-data env key) val)
           (semaphore-post (get-data-sem env))
+          (send-message env (make-message (data-changed-type key field) field))
           #t)
         #f)))
 
 
-;; Hash data object at provided key, unless object already present
+;; Hash data object at provided key
 (define (hash-data! env data-key data)
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-  (when (and (not (boolean? data-key)) (not (number? data-key)))
-    (raise-inv-arg "data-key not a number or #f" data-key))
-
   (semaphore-wait (get-data-sem env))
   (hash-set! (get-data-hash env) data-key data)
   (semaphore-post (get-data-sem env))
   #t)
 
 
-;; PUBLIC API
-;; Register new data object with the datapool.
-(define (register-data! env data)
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
 
-  (let ([key (gen-dp-data-obj-key env)])
-    (if (not (get-data env key)) ;don't hash if data exists 
+;;;----------------------------------------------------------------------------
+;;; COMMUNICATION - messaging
+;;;---------------------------------------------------------------------------- 
+;; message class 
+(define message%
+  (class object% 
+         (super-new)
+         (init-field
+           src
+           type
+           content)))
+
+
+;; PUBLIC API
+;; Create a message object 
+(define (message type content [source-key #f])
+  (make-object message% source-key type content)) 
+
+
+;; PUBLIC API
+;; Return the message's type
+(define (message-type msg)
+  (get-field type msg))
+
+
+;; PUBLIC API
+;; Return the message's content
+(define (message-content msg)
+  (get-field content msg))
+
+
+;; PUBLIC API
+;; Return the message's content
+(define (message-source msg)
+  (get-field src msg))
+
+
+;; Get the hash of message callback handlers
+(define (get-dp-message-handler-hash env)
+  (vector-ref (vector-ref (unbox-dp-env env) 2) 0))
+
+
+;; Get the message callback handlers semaphore
+(define (get-dp-message-handler-hash-sem env)
+  (vector-ref (vector-ref (unbox-dp-env env) 2) 1))
+
+
+;; Get message callback handlers for msg-type and src-key
+(define (get-dp-message-handlers env msg-type src-key)
+  (if (hash-ref (get-dp-message-handler-hash env) msg-type #f)
+      (hash-ref (hash-ref (get-dp-message-handler-hash env) msg-type) src-key #f)
+      #f))
+
+
+;; Set the message handlers list for msg-type and src-key to something new
+(define (set-dp-message-handlers! env msg-type src-key handlers) 
+  ;; Take message sem first because another message handler may be using the 
+  ;; data object sem, which would cause us to lock up
+  (semaphore-wait (get-dp-message-handler-hash-sem env))
+  (semaphore-wait (get-data-sem env))
+  (define ret #t)
+
+  ;; If msg-type hash doesn't exist create it
+  (set! ret (and 
+              ret 
+              (if (hash-ref 
+                    (get-dp-message-handler-hash env) 
+                    msg-type 
+                    #f)
+                  #t
+                  (hash-set! 
+                    (get-dp-message-handler-hash env) 
+                    msg-type 
+                    (make-hash)))))
+
+  ;; If src-key hash doesn't exist create it
+  (set! ret (and ret 
+                 (if (hash-ref 
+                       (hash-ref 
+                         (get-dp-message-handler-hash env) 
+                         msg-type) 
+                       src-key 
+                       #f)
+                     #t
+                     (hash-set! 
+                       (hash-ref 
+                         (get-dp-message-handler-hash env) 
+                         msg-type) 
+                       src-key 
+                       (make-hash)))))
+
+  ;; Set list of handlers
+  (set! ret (and
+              ret 
+              (hash-set! 
+                (hash-ref 
+                  (get-dp-message-handler-hash env) 
+                  msg-type) 
+                src-key handlers)))
+  (semaphore-post (get-data-sem env))
+  (semaphore-post (get-dp-message-handler-hash-sem env))
+  #t)
+
+
+;; PUBLIC API
+;; Register a callback handler coroutine (the procedure itself, not a 
+;; suspended invocation). This coroutine should accept 1 message argument. If 
+;; input-data is specified the coroutine should also accept a list argument 
+;; where the extracted data shall be passed to the coroutine.
+;;
+;; The handler will only execute if an incoming message is sent with a matching
+;; src-key to the one specified here. By default this is #f, and will only match 
+;; messages with a src-key equal to #f.
+;;
+;;
+;; When the callback activates the data stored at each key/field pair specified 
+;; in input-data list is retrieved from the data hash and passed as a list to 
+;; the handler after the msg variable in the following fashion:
+;; (go env (handler msg input) return-destinations)
+;;
+;; As seen above return-destinations are passed to the (go) form when the 
+;; handler is invoked.
+;;
+;;
+;; input-data should be a list of key and fields like the following:
+;; (list (list key1 'field1) (list key2 'field2) ... (list keyn 'fieldn))
+;;
+;; If the data itself (instead of a data object's field) is desired, simply set 
+;; the field to #f:
+;; (list (list key1 #f))
+;;
+;; return-destinations follows a slightly different convention (see 
+;; documentation for the (go) function).
+;;
+;; Example:
+;; (define-message-handler 
+;;   example-env 
+;;   example-handler 
+;;   (data-changed-type example-key 'example-field)                  ;<== when we get this message 
+;;   #f                                                              ;<== from this source
+;;   (list (list example-input-key 'example-input-field))            ;<== give these data values (and the message) as input into example-handler
+;;   (list (list '#:data ex-destination-key 'ex-destination-field))) ;<== use these to direct where the output from example-handler is stored
+(define (define-message-handler 
+          env 
+          coroutine-procedure 
+          msg-type 
+          [src-key #f] 
+          [input-data #f]
+          [return-destinations #f])
+  (let ([msg-handlers (get-dp-message-handlers env msg-type src-key)])
+    (if msg-handlers
+        (set-dp-message-handlers! 
+          env 
+          msg-type 
+          src-key
+          (append msg-handlers (list (list coroutine-procedure 
+                                           input-data
+                                           return-destinations))))
+        (set-dp-message-handlers! 
+          env 
+          msg-type 
+          src-key
+          (list (list coroutine-procedure 
+                      input-data
+                      return-destinations))))
+    #t))
+
+
+;; coroutine to manage sending messages to connected handlers
+(define-coroutine 
+  (send-message-co env msg src-key)
+  (let ([handlers (get-dp-message-handlers 
+                    env
+                    (get-field type msg)
+                    src-key)])
+    (if handlers
         (let ()
-          (hash-data! env key data)
-          key)
+          (map
+            (lambda (i)
+              (let ([handler (car i)]
+                    [input-key-field-list (car (cdr i))]
+                    [return-key-field-list (car (cddr i))])
+                (go env (handler msg) return-key-field-list)))
+            handlers)
+          #t)
         #f)))
+
+
+;; PUBLIC API
+;; Send a message to connected handlers in the current datapool
+(define (send-message env msg [src-key #f])
+  (go env (send-message-co env msg src-key)))
+
+
+;; PUBLIC API
+;; Data destructor. Removes message handlers, removes the data from the data 
+;; hash, and enqueues the now free data key onto a free floating key queue
+(define (delete-data! env data-key) 
+  (let ([data (get-data env data-key)])
+    (if (not (equal? data 'not-found)) ;if data exists
+        (let ()
+          ;Need to protect against all modifications against the data hash AND
+          ;the data message hash
+          (semaphore-wait (get-dp-message-handler-hash-sem env))
+          (semaphore-wait (get-data-sem env))
+
+          ;Remove any hash where data-key is the src-key 
+          (hash-for-each 
+            (get-dp-message-handler-hash env)
+            (lambda (msg-type cur-hash)
+              (hash-remove! (hash-ref (get-dp-message-handler-hash env) msg-type) data-key)))
+
+          ;Remove all callbacks to data-key 
+          (hash-for-each 
+            (get-dp-message-handler-hash env) 
+            (lambda (msg-type msg-type-hash)
+              (hash-remove! msg-type-hash data-key)
+              (when
+                (equal? (hash-count msg-type-hash) 0)
+                (hash-remove! (get-dp-message-handler-hash env) msg-type))))
+
+          ;Remove the data from the hash
+          (hash-remove! (get-data-hash env) data-key)
+          (semaphore-post (get-data-sem env))
+          (semaphore-post (get-dp-message-handler-hash-sem env))
+
+          (add-free-dp-data-key env data-key)
+          #t)
+        #f))) 
+
+
+;; PUBLIC API
+;; Register new data object with the datapool and return the data's new key
+(define (define-data! env data)
+  (let* ([key (gen-dp-data-obj-key env)]
+         [cur-data (get-data env key)])
+    (semaphore-wait (get-data-sem env))
+    (when (equal? cur-data 'not-found) ;don't hash if data exists
+      (hash-data! env key data)
+      (send-message env (make-message (data-changed-type key) key)))
+    (semaphore-post (get-data-sem env))
+    key))
+
+
+;; PUBLIC API
+;; Redefine data at key
+(define (set-data! env key value)
+  (if (equal? (get-data env key) 'not-found)
+      (let ()
+        (semaphore-wait (get-data-sem env))
+        (hash-data! env key data)
+        (semaphore-post (get-data-sem env))
+        (send-message env (make-message (data-changed-type key) data))
+        key)
+      'not-found))
+
+
+;Handle (go) return values by sending them to the specified locations in the 
+;return-dests list
+;
+;return-dests list accepts the following keywords with argument groups:
+;'#:message type source
+;'#:data key field
+;'#:channel channel
+;
+;The actual values provided for each message/data/data-field/channel handler 
+;are the list of return values from the (go) function, in order. 
+;
+;Valid return-destination-list examples:
+;(list (list '#:data key field) (list '#:message type source))
+;(list (list '#:channel ch1) (list '#:channel ch2))
+;(list (list '#:data key1 field1) 
+;      (list '#:data key2 field2) 
+;      (list '#:message type source))
+;
+;If a return value is '#:invalid, then the specific destination handler is 
+;skipped.
+(define (handle-go-returns env return-dests return-vals)
+  ;Pop off the front of a list, returning the popped value and resulting list
+  (define (pop-list inp-list)
+    (if (null? inp-list)
+        inp-list
+        (values (car inp-list) (cdr inp-list))))
+
+  ;Handle any message returns
+  (define (handle-return-message type content src)
+    (send-message env (make-message type content src)))
+
+  ;Handle any data returns
+  (define (handle-return-data key field val)
+    (if field
+        ;set object field at data key
+        (set-data-field! env first-val second-val val)
+        ;replace data at key
+        (set-data! env first-val val)))
+
+  ;Handle any channel returns
+  (define (handle-return-channel ch val)
+    (ch-put ch val))
+
+  ;Attempt to do something with the provided return value and destination 
+  ;context
+  (define (handle-return dest val)
+    (let ([type (car dest)])
+      (if (equal? val '#:invalid)
+          (values) ;do nothing
+          (case type
+            ['#:message 
+             (if (equal? (length dest) 3)
+                 (let ([type cadr dest]
+                       [source caddr dest])
+                   (let ()
+                     (handle-return-message type source)
+                     (error "Incorrect number of arguments in '#:message (go) handler" (length dest)))))]
+            ['#:data 
+             (if (equal? (length dest) 3)
+                 (let ([key (cadr dest)]
+                       [field (caddr dest)])
+                   (let ()
+                     (handle-return-message key field val)
+                     (error "Incorrect number of arguments in '#:data (go) handler" (length dest)))))]
+            ['#:channel 
+             (if (equal? (length dest) 2)
+                 (let ([ch (cadr dest)])
+                   (handle-return-channel ch val)
+                   (error "Incorrect number of arguments in '#:channel (go) handler" (length dest))))]
+            [else (error "Invalid type in (go) return handler" type)]))))
+
+  ;Get subset lists that can be handled (lowest common list length between
+  ;return-dests and return-vals) and attempt to handle the return value
+  (define (handle-go-returns-intern return-dests return-vals)
+    (let ([vals (if (< (length return-dests) (length return-vals))
+                    (left return-vals (length return-dests))
+                    return-vals)]
+          [dests (if (> (length return-dests) (length return-vals))
+                     (left return-dests (length return-vals))
+                     return-dests)])
+      (for ([val vals]
+            [dest dests])
+           (handle-return dest val))))
+
+  (handle-go-returns-intern return-dests return-vals))
 
 
 
@@ -641,14 +990,12 @@
 ;; Returns: #t if task completed, #f if task not yet completed
 (define (dp-thread-exec-task env thread-idx task)
   (let* ([co (car task)]
-         [ret-key (car (cdr task))]
-         [ret-field (car (cddr task))]
-         [ret (co)])
+         [return-dests (cadr task)]
+         [return-vals (co)])
     (if (co 'dead?) ;check if coroutine is dead 
         (let () ;task completed 
-          (when (and ret-key ret-field) ;if requested set a data object field with result
-            (set-data-field! env ret-key ret-field ret)
-            (send-message env (message `(,ret-key ,ret-field changed) ret)))
+          (when return-dests
+            (handle-go-returns env return-dests return-vals))
           #t)
         (let ()
           (go env co ret-key ret-field) ;place task at the back of a queue
@@ -696,1301 +1043,7 @@
 
 
 
-;;;----------------------------------------------------------------------------
-;;; COMMUNICATION - messaging
-;;;---------------------------------------------------------------------------- 
-;; message class 
-(define message%
-  (class object% 
-         (super-new)
-         (init-field
-           src
-           type
-           content)))
-
-
-;; PUBLIC API
-;; Create a message object 
-(define (message type content [source-key #f])
-  (when (and (not (boolean? source-key)) (not (number? source-key)))
-    (raise-inv-arg "source-key not a number or #f" source-key))
-  (make-object message% source-key type content)) 
-
-
-;; PUBLIC API
-;; Return the message's type
-(define (message-type msg)
-  (when (not (object? msg))
-    (raise-inv-arg "msg not an object" msg))
-  (get-field type msg))
-
-
-;; PUBLIC API
-;; Return the message's content
-(define (message-content msg)
-  (when (not (object? msg))
-    (raise-inv-arg "msg not an object" msg))
-  (get-field content msg))
-
-
-;; PUBLIC API
-;; Return the message's content
-(define (message-source msg)
-  (when (not (object? msg))
-    (raise-inv-arg "msg not an object" msg))
-  (get-field src msg))
-
-
-;; Get the hash of message callback handlers
-(define (get-dp-message-handler-hash env)
-  (vector-ref (vector-ref (unbox-dp-env env) 2) 0))
-
-
-;; Get the message callback handlers semaphore
-(define (get-dp-message-handler-hash-sem env)
-  (vector-ref (vector-ref (unbox-dp-env env) 2) 1))
-
-
-;; Get message callback handlers for msg-type and src-key
-(define (get-dp-message-handlers env msg-type src-key)
-  (if (hash-ref (get-dp-message-handler-hash env) msg-type #f)
-      (hash-ref (hash-ref (get-dp-message-handler-hash env) msg-type) src-key #f)
-      #f))
-
-
-;; Set the message handlers list for msg-type and src-key to something new
-(define (set-dp-message-handlers! env msg-type src-key handlers) 
-  ;; Take message sem first because another message handler may be using the 
-  ;; data object sem, which would cause us to lock up
-  (semaphore-wait (get-dp-message-handler-hash-sem env))
-  (semaphore-wait (get-data-sem env))
-  (define ret #t)
-
-  ;; If msg-type hash doesn't exist create it
-  (set! ret (and 
-              ret 
-              (if (hash-ref 
-                    (get-dp-message-handler-hash env) 
-                    msg-type 
-                    #f)
-                  #t
-                  (hash-set! 
-                    (get-dp-message-handler-hash env) 
-                    msg-type 
-                    (make-hash)))))
-
-  ;; If src-key hash doesn't exist create it
-  (set! ret (and 
-              ret 
-              (if (hash-ref 
-                    (hash-ref 
-                      (get-dp-message-handler-hash env) 
-                      msg-type) 
-                    src-key 
-                    #f)
-                  #t
-                  (hash-set! 
-                    (hash-ref 
-                      (get-dp-message-handler-hash env) 
-                      msg-type) 
-                    src-key 
-                    (make-hash)))))
-
-  ;; Set list of handlers
-  (set! ret (and
-              ret 
-              (hash-set! 
-                (hash-ref 
-                  (get-dp-message-handler-hash env) 
-                  msg-type) 
-                src-key handlers)))
-  (semaphore-post (get-data-sem env))
-  (semaphore-post (get-dp-message-handler-hash-sem env))
-  #t)
-
-
-;; PUBLIC API
-;; Register a callback handler coroutine (the procedure itself, not a 
-;; suspended invocation). This coroutine should accept 1 message argument and 
-;; nothing else.
-;;
-;; The handler will only execute if an incoming message is sent with a matching
-;; src-key to the one specified here. By default this is #f, and will only match 
-;; messages with a src-key equal to #f.
-;;
-;; ret-key and ret-field are passed to the (go) form when the handler is invoked.
-(define (register-message-handler 
-          env 
-          coroutine-procedure 
-          msg-type 
-          [src-key #f] 
-          [ret-key #f] 
-          [ret-field #f])
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-  (when (and (not (boolean? src-key)) (not (number? src-key)))
-    (raise-inv-arg "src-key not a number or #f" src-key))
-  (when (and (not (boolean? ret-key)) (not (number? ret-key)))
-    (raise-inv-arg "ret-key not a number or #f" ret-key))
-
-  (let ([msg-handlers (get-dp-message-handlers env msg-type src-key)])
-    (if msg-handlers
-        (set-dp-message-handlers! 
-          env 
-          msg-type 
-          src-key
-          (append msg-handlers (list (list coroutine-procedure ret-key ret-field))))
-        (set-dp-message-handlers! 
-          env 
-          msg-type 
-          src-key
-          (list (list coroutine-procedure ret-key ret-field))))
-    #t))
-
-
-;; coroutine to manage sending messages to connected handlers
-(define-coroutine 
-  (send-message-co env msg src-key)
-  (let ([handlers (get-dp-message-handlers 
-                    env
-                    (get-field type msg)
-                    src-key)])
-    (if handlers
-        (let ()
-          (map
-            (lambda (i)
-              (let ([handler (car i)]
-                    [ret-key (car (cdr i))]
-                    [ret-field (car (cddr i))])
-                (go env (handler msg) ret-key ret-field)))
-            handlers)
-          #t)
-        #f)))
-
-
-;; PUBLIC API
-;; Send a message to connected handlers in the current datapool
-(define (send-message env msg [src-key #f])
-  (when (not (vector? (unbox-dp-env env)))
-    (raise-inv-arg "env not a vector" (unbox-dp-env env)))
-  (when (not (object? msg))
-    (raise-inv-arg "msg not an object" msg))
-  (when (and (not (boolean? src-key)) (not (number? src-key)))
-    (raise-inv-arg "src-key not a number or #f" src-key))
-
-  (go env (send-message-co env msg src-key)))
-
-
-;; PUBLIC API
-;; Data destructor. Removes message handlers, removes the data from the data 
-;; hash, and enqueues the now free data key onto a free floating key queue
-(define (delete-data! env data-key) 
-  (let ([data (get-data env data-key)])
-    (if (not (equal? data #f)) ;if data exists
-        (let ()
-          ;Need to protect against all modifications against the data hash AND
-          ;the data message hash
-          (semaphore-wait (get-dp-message-handler-hash-sem env))
-          (semaphore-wait (get-data-sem env))
-
-          ;Remove any hash where data-key is the src-key 
-          (hash-for-each 
-            (get-dp-message-handler-hash env)
-            (lambda (msg-type cur-hash)
-              (hash-remove! (hash-ref (get-dp-message-handler-hash env) msg-type) data-key)))
-
-          ;Remove all callbacks to data-key 
-          (hash-for-each 
-            (get-dp-message-handler-hash env) 
-            (lambda (msg-type msg-type-hash)
-              (hash-remove! msg-type-hash data-key)
-              (when
-                (equal? (hash-count msg-type-hash) 0)
-                (hash-remove! (get-dp-message-handler-hash env) msg-type))))
-
-          ;Remove the data from the hash
-          (hash-remove! (get-data-hash env) data-key)
-          (semaphore-post (get-data-sem env))
-          (semaphore-post (get-dp-message-handler-hash-sem env))
-
-          (add-free-dp-data-key env data-key)
-          #t)
-        #f))) 
-
-
-
 ;;;---------------------------------------------------------------------------- 
 ;;; TESTING - 3 unit tests
 ;;;---------------------------------------------------------------------------- 
-;; PUBLIC API
-(define 
-  (run-3-unit-tests [pr #t] [wait #f])
-  (reset-test-results)
-  (define test-num 1)
-  (define (test-text text)
-    (let ([ret (string-append text " " (number->string test-num))])
-      (set! test-num (+ test-num 1))
-      ret))
-
-
-  ;;**************************************
-  ;;TEST defined?
-  ;;     test-true? 
-  ;;     test-equal?
-  ;;     test-pass
-  ;;     test-fail
-  ;;-------------------------------------- 
-  (test-section "test functions")
-  (let ()
-    (define x 3)
-    (test-true? "defined? 1" (if (defined? x) #t #f) pr wait)
-    (test-true? "defined? 2" (if (defined? y) #f #t) pr wait)
-    (test-true? "test-true? 1" #t pr wait)
-    (test-true? "test-true? 2" (not #f) pr wait)
-    (test-equal? "test-equal? 3" 1 1 pr wait)
-    (test-equal? "test-equal? 4" "test" "test" pr wait)
-    (test-equal? "test-equal? 5" 'test 'test pr wait))
-  ;;**************************************
-
-
-  ;;**************************************
-  ;;TEST coroutine
-  ;;--------------------------------------
-  (test-section "coroutines")
-  (let ([arg1 3]
-        [arg2 4])
-
-    (set! test-num 1)
-
-    (define-coroutine
-      (co-test1) 
-      (yield 1)
-      (yield 2)
-      #f)
-
-    (define ct1 (co-test1))
-
-    ;Test the coroutine runs correctly
-    (test-true? "new coroutine alive" (ct1 'alive?) pr wait)
-    (test-equal? "coroutine yields expected 1" (ct1) 1 pr wait)
-    (test-true? "coroutine alive" (ct1 'alive?) pr wait)
-    (test-equal? "coroutine yields expected 2" (ct1) 2 pr wait)
-    (test-true? "coroutine alive" (ct1 'alive?) pr wait)
-    (test-true? "coroutine returns #f" (not (ct1)) pr wait)
-    (test-true? "coroutine dead" (ct1 'dead?) pr wait)
-
-    (define-coroutine
-      (co-test2 arg1 arg2)
-      (yield arg1)
-      (yield arg2)
-      #f)
-
-    (define ct2 (co-test2 "teststring" 'test))
-
-    ;Test coroutine can be run with arguments
-    (test-true? "new coroutine alive" (ct2 'alive?) pr wait)
-    (test-equal? "coroutine yields \"teststring\"" (ct2) "teststring" pr wait)
-    (test-true? "coroutine alive" (ct2 'alive?) pr wait)
-    (test-equal? "coroutine yields 'test" (ct2) 'test pr wait)
-    (test-true? "coroutine alive" (ct2 'alive?) pr wait)
-    (test-true? "coroutine returns #f" (not (ct2)) pr wait)
-    (test-true? "coroutine dead" (ct2 'dead?) pr wait)
-
-    (set! ct2 (co-test2 'test2 "teststring2"))
-
-    ;Test coroutine can be rerun with new arguments
-    (test-true? "new coroutine alive" (ct2 'alive?) pr wait)
-    (test-equal? "coroutine yields 'test" (ct2) 'test2 pr wait)
-    (test-true? "coroutine alive" (ct2 'alive?) pr wait)
-    (test-equal? "coroutine yields \"teststring2\"" (ct2) "teststring2" pr wait)
-    (test-true? "coroutine alive" (ct2 'alive?) pr wait)
-    (test-true? "coroutine" (not (ct2)) pr wait)
-    (test-true? "coroutine dead" (ct2 'dead?) pr wait)
-
-    ;Should *not* raise an exception due to the stateful (set!)
-    (with-handlers ([exn:fail:user? (lambda (e) (test-fail e))])
-                   (define-coroutine 
-                     (co-test3 arg1)
-                     (yield arg1)
-                     (set! arg1 2)
-                     (yield arg1))
-                   (define ct3 (co-test3 1))
-                   (test-equal? "new coroutine yields 1" (ct3) 1 pr wait)
-                   (test-equal? "coroutine yields changed argument (2)" (ct3) 2 pr wait)
-                   ;Final argument of coroutine is a (yield) so we have to run 
-                   ;again to hit the end (even though there are no forms left 
-                   ;to evaluate)
-                   (test-equal? "coroutine returns 2 (previous return value), because the last form is a (yield) so the coroutine is not technically 'dead yet" (ct3) 2 pr wait)
-                   (test-true? "coroutine dead" (ct3 'dead?) pr wait)) 
-
-    ;tail recursion in coroutines should be done with internally defined functions 
-    ;for readability. This is because a coroutine invocation (example: (my-couroutine)) 
-    ;initially returns the routine in the 'suspended state before evaluating body 
-    ;forms. It's confusing to have to do a double invocation (example: ((my-couroutine)))
-    ;as a tail form. I'm also not sure it actually *counts* as true tail recursion in that 
-    ;sense (that racket will understand what's happening and properly adapt instead
-    ;of generating new stack frames)
-    (define-coroutine (co-test4 val)
-                      (define (recurse-func val)
-                        (if (equal? val 0)
-                            val
-                            (let ()
-                              (yield val)
-                              (recurse-func (- val 1)))))
-                      (recurse-func val))
-
-    (define ct4 (co-test4 3))
-    (test-true? "new coroutine alive" (ct4 'alive?) pr wait)
-    (test-equal? "recursive function in coroutine yields expected value" (ct4) 3 pr wait)
-    (test-equal? "recursive function in coroutine yields expected value" (ct4) 2 pr wait)
-    (test-equal? "recursive function in coroutine yields expected value" (ct4) 1 pr wait)
-    (test-equal? "recursive function in coroutine returns expected value" (ct4) 0 pr wait)
-    (test-true? "coroutine dead" (ct4 'dead?) pr wait)) 
-  ;;************************************** 
-
-
-  ;;**************************************
-  ;;TEST channel ch-get ch-put
-  ;;--------------------------------------
-  (test-section "channels")
-  (let ([ch (channel)])
-    (test-true? "channel creation" (async-channel? ch) pr wait))
-
-  (let ([ch (channel)])
-    (async-channel-put ch "teststring")
-    (let ([ret (ch-get ch #f)])
-      (test-equal? "ch-get can get a string" ret "teststring" pr wait)))
-
-  (let ([ch (channel)])
-    (async-channel-put ch "teststring2")
-    (let ([ret (ch-get ch)])
-      (test-equal? "ch-get can get a different string" ret "teststring2" pr wait)))
-
-  (let ([ch (channel)])
-    (ch-put ch "teststring")
-    (let ([ret (ch-get ch #f)])
-      (test-equal? "ch-put a string" ret "teststring" pr wait)))
-
-  (let ([ch (channel)])
-    (ch-put ch "teststring2")
-    (let ([ret (ch-get ch)])
-      (test-equal? "ch-put another string" ret "teststring2" pr wait)))
-  ;;**************************************
-
-
-  ;;**************************************
-  ;;TEST datapool 
-  ;;     unbox-dp-env 
-  ;;     close-dp
-  ;;-------------------------------------- 
-  (test-section "datapool data constructor, getter, and destructor functions")
-  ;Make a datapool
-  (let* ([num-threads 2]
-         [env (datapool num-threads)]) 
-
-    ;;------------------------------------- 
-    ;; check num counts are correct
-    (test-equal?
-      "number of threads"
-      (vector-ref (vector-ref (unbox-dp-env env) 0) 0)
-      2
-      pr
-      wait)
-
-    ;;-------------------------------------
-    ;Verify threads exist
-    (for ([i num-threads])
-         (test-true? 
-           "(and datapool get-data) verify threads exist" 
-           (thread? 
-             (vector-ref 
-               (vector-ref 
-                 (vector-ref 
-                   (unbox-dp-env 
-                     env) 
-                   1) 
-                 i) 
-               0)) 
-           pr 
-           wait))
-
-    ;Verify the threads are alive
-    (for ([i num-threads])
-         (test-true? 
-           "(and datapool get-data) verify threads are alive" 
-           (not 
-             (thread-dead? 
-               (vector-ref
-                 (vector-ref 
-                   (vector-ref 
-                     (unbox-dp-env 
-                       env) 
-                     1) 
-                   i) 
-                 0))) 
-           pr 
-           wait))
-
-    ;Verify thread task queues exist
-    (for ([i num-threads])
-         (test-true? 
-           "(and datapool get-data) verify task queues exist" 
-           (queue? 
-             (vector-ref 
-               (vector-ref 
-                 (vector-ref 
-                   (unbox-dp-env 
-                     env) 
-                   1) 
-                 i) 
-               1)) 
-           pr 
-           wait))
-
-    ;Verify thread task queue semaphores exist
-    (for ([i num-threads])
-         (test-true? 
-           "(and datapool get-data) verify task queue semaphores exist" 
-           (semaphore? 
-             (vector-ref 
-               (vector-ref 
-                 (vector-ref 
-                   (unbox-dp-env 
-                     env) 
-                   1) 
-                 i) 
-               2)) 
-           pr 
-           wait))
-
-
-    ;;-------------------------------------
-    ;Verify hash table of message handlers exists
-    (test-true? 
-      "(and datapool get-data) verify message handler hash table exists" 
-      (hash? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            2) 
-          0)) 
-      pr 
-      wait)
-
-    ;Verify message hash table semaphore exists
-    (test-true? 
-      "(and datapool get-data) verify message handlers hash table semaphore exists" 
-      (semaphore? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            2) 
-          1)) 
-      pr 
-      wait)
-
-    ;;-------------------------------------
-    ;Verify hash table of data objects exists
-    (test-true? 
-      "(and datapool get-data) verify hash table of data objects exists" 
-      (hash? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            3) 
-          0)) 
-      pr 
-      wait)
-
-    ;Verify hash table semaphore exists
-    (test-true? 
-      "(and datapool get-data) verify data object hash table semaphore exists" 
-      (semaphore? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            3) 
-          1)) 
-      pr 
-      wait)
-
-    ;Verify data object key source variable exists
-    (test-true? 
-      "(and datapool get-data) verify data object key source variable exists" 
-      (number? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            3) 
-          2)) 
-      pr 
-      wait)
-
-    ;Verify data object freed key queue exists
-    (test-true? 
-      "(and datapool get-data) verify data object freed key queue exists" 
-      (queue? 
-        (vector-ref 
-          (vector-ref 
-            (unbox-dp-env 
-              env) 
-            3) 
-          3)) 
-      pr 
-      wait)
-
-    ;Verify we can kill the datapool environment
-    (close-dp env)
-
-    (for ([i num-threads])
-         (let ([o (open-output-string)])
-           (fprintf o "close-dp thread ~a" i)
-           (test-true? 
-             (get-output-string o) 
-             (thread-dead? 
-               (vector-ref 
-                 (vector-ref 
-                   (vector-ref 
-                     (unbox-dp-env 
-                       env) 
-                     1) 
-                   i) 
-                 0)) 
-             pr 
-             wait))))
-  ;;**************************************
-
-
-  ;;**************************************
-  ;;TEST get-dp-thread 
-  ;;     get-dp-queue 
-  ;;     get-dp-queue-sem 
-  ;;     get-data-hash 
-  ;;     get-data-sem 
-  ;;     gen-dp-data-obj-key 
-  ;;     get-data-key-src 
-  ;;     set-data-key-src 
-  ;;     get-data-free-key-q
-  ;;--------------------------------------
-  (test-section "datapool getters & setters")
-  (let* ([num-threads 2]
-         [env (datapool num-threads)])
-
-    ;-------------------------------------- 
-    ;verify datapool info is correct
-    (test-equal?
-      "get-num-dp-threads"
-      (get-num-dp-threads env)
-      2
-      pr
-      wait)
-
-    ;--------------------------------------
-    ;verify correct num of threads exist 
-    (test-equal? 
-      "get-num-dp-threads verify correct num of threads exist" 
-      (get-num-dp-threads env) 
-      2 
-      pr 
-      wait)
-
-    ;verify threads exist 
-    (test-true? 
-      "get-dp-thread verify threads exist 1" 
-      (thread? (get-dp-thread env 0)) 
-      pr 
-      wait)
-
-    (test-true? 
-      "get-dp-thread verify threads exist 2" 
-      (thread? (get-dp-thread env 1)) 
-      pr 
-      wait)
-
-    ;verify thread task queues exist
-    (test-true? 
-      "get-dp-queue verify thread task queues exist 1" 
-      (queue? (get-dp-queue env 0)) 
-      pr 
-      wait)
-
-    (test-true? 
-      "get-dp-queue verify thread task queues exist 2" 
-      (queue? (get-dp-queue env 1)) 
-      pr 
-      wait)
-
-    ;verify thread task queues semaphores exist
-    (test-true? 
-      "get-dp-queue-sem verify thread task queues semaphores exist 1" 
-      (semaphore? (get-dp-queue-sem env 0)) 
-      pr 
-      wait)
-
-    (test-true? 
-      "get-dp-queue-sem verify thread task queues semaphores exist 2" 
-      (semaphore? (get-dp-queue-sem env 1)) 
-      pr 
-      wait)
-
-
-    ;--------------------------------------
-    ;verify data object hash exists
-    (test-true? 
-      "get-data-hash verify data object hash exists" 
-      (hash? (get-data-hash env)) 
-      pr 
-      wait) 
-
-    (test-true? 
-      "get-data-sem verify data object hash semaphore exists" 
-      (semaphore? (get-data-sem env)) 
-      pr 
-      wait)
-
-    ;verify key generation
-    (test-equal? 
-      "gen-dp-data-obj-key verify key generation 1" 
-      (gen-dp-data-obj-key env) 
-      0 
-      pr 
-      wait)
-
-    (test-equal? 
-      "gen-dp-data-obj-key verify key generation 2" 
-      (gen-dp-data-obj-key env) 
-      1 
-      pr 
-      wait)
-
-    (test-equal? 
-      "gen-dp-data-obj-key verify key generation 3" 
-      (gen-dp-data-obj-key env) 
-      2 
-      pr 
-      wait)
-
-    (test-equal? 
-      "gen-dp-data-obj-key verify key generation 4" 
-      (gen-dp-data-obj-key env) 
-      3 
-      pr 
-      wait)
-
-    ;verify can get data object key source number  
-    (test-equal? "get-data-key-src" (get-data-key-src env) 4 pr wait)
-    (test-equal? "get-data-key-src" (get-data-key-src env) 4 pr wait)
-
-    ;verify can set data object key source number (?? should never do this?)
-    (set-data-key-src env 2)
-    (test-equal? "get-data-key-src" (get-data-key-src env) 2 pr wait) 
-
-    ;verify get-data-free-key-q
-    (test-true? "get-data-free-key-q" (queue? (get-data-free-key-q env)) pr wait)
-
-    (close-dp env))
-  ;;**************************************
-
-  ;;**************************************
-  ;;TEST get-min-dp-q-idx 
-  ;;     get-max-dp-q-idx 
-  ;;     go
-  ;;--------------------------------------
-  (test-section "task queue getters & setters")
-  (let* ([num-threads 2]
-         [env (datapool num-threads)])
-
-    ;;Arbitrary coroutine to execute
-    (define-coroutine (test-task) #t)
-
-    ;;Test defaults
-    ;q0-size: 0, q1-size: 0
-    (test-equal? "get-min-dp-q-idx 1" (get-min-dp-q-idx env) 0 pr wait)
-    (test-equal? "get-max-dp-q-idx 1" (get-max-dp-q-idx env) 0 pr wait)
-    (test-equal? "q-len idx 0" (queue-length (get-dp-queue env 0)) 0 pr wait)
-    (test-equal? "q-len idx 1" (queue-length (get-dp-queue env 1)) 0 pr wait)
-
-    (enqueue! (get-dp-queue env 0) (list (test-task) #f #f))
-
-    ;q0-size: 1, q1-size: 0
-    (test-equal? "get-min-dp-q-idx 2" (get-min-dp-q-idx env) 1 pr wait)
-    (test-equal? "get-max-dp-q-idx 2" (get-max-dp-q-idx env) 0 pr wait)
-    (test-equal? "q-len idx 0" (queue-length (get-dp-queue env 0)) 1 pr wait)
-    (test-equal? "q-len idx 1" (queue-length (get-dp-queue env 1)) 0 pr wait)
-
-    (enqueue! (get-dp-queue env 1) (list (test-task) #f #f))
-
-    ;q0-size: 1, q1-size: 1
-    (test-equal? "get-min-dp-q-idx 3" (get-min-dp-q-idx env) 0 pr wait)
-    (test-equal? "get-max-dp-q-idx 3" (get-max-dp-q-idx env) 0 pr wait)
-    (test-equal? "q-len idx 0" (queue-length (get-dp-queue env 0)) 1 pr wait)
-    (test-equal? "q-len idx 1" (queue-length (get-dp-queue env 1)) 1 pr wait)
-
-    (enqueue! (get-dp-queue env 1) (list (test-task) #f #f))
-
-    ;q0-size: 1, q1-size: 2
-    (test-equal? "get-min-dp-q-idx 4" (get-min-dp-q-idx env) 0 pr wait)
-    (test-equal? "get-max-dp-q-idx 4" (get-max-dp-q-idx env) 1 pr wait)
-    (test-equal? "q-len idx 0" (queue-length (get-dp-queue env 0)) 1 pr wait)
-    (test-equal? "q-len idx 1" (queue-length (get-dp-queue env 1)) 2 pr wait)
-
-    (close-dp env))
-  ;;**************************************
-
-
-  ;;**************************************
-  ;;TEST hash-data!
-  ;;     get-data  
-  ;;     register-data!
-  ;;--------------------------------------
-  (test-section "manage data objects")
-  (let* ([num-threads 2]
-         [env (datapool num-threads)]) 
-
-    (define test-key 1337)
-
-    (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) 0 pr wait)
-    (test-true? "hash-data! number" (hash-data! env test-key 3) pr wait)
-    (test-true? "hash-data! string" (hash-data! env test-key "3") pr wait)
-    (test-true? "hash-data! list" (hash-data! env test-key (list 3)) pr wait)
-    (test-true? "hash-data! quote" (hash-data! env test-key '(3)) pr wait)
-
-    (define test-class%
-      (class object% (super-new)
-             (field [3-field 3])
-             (define/public (get-3) 3-field)))
-
-    (define test-object (make-object test-class%))
-
-    (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) 1 pr wait)
-    (test-true? "hash-data! 1" (hash-data! env test-key test-object) pr wait)
-    (test-true? "hash-data! 2" (hash-data! env test-key test-object) pr wait)
-
-    (test-equal? "get-data 1" (send (get-data env test-key) get-3) 3 pr wait)
-    (test-true? "get-data 2" (not (get-data env 1)) pr wait) 
-
-    (set-field! 3-field (get-data env test-key) 2)
-    (test-equal? "set-field succeeded?" (get-field 3-field (get-data env test-key)) 2 pr wait) 
-
-
-    (let ([hash-size (hash-count (get-data-hash env))])
-      (let ([key (register-data! env test-object)])
-        (test-equal? "register-data! object succeeds" key 0 pr wait)
-        (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) (+ hash-size 1) pr wait)))
-    (let ([hash-size (hash-count (get-data-hash env))])
-      (let ([key (register-data! env test-object)])
-        (test-equal? "register-data! object succeeds" key 1 pr wait)
-        (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) (+ hash-size 1) pr wait)))
-    (close-dp env))
-  ;;**************************************
-
-
-  ;;**************************************
-  ;;TEST message%
-  ;;     message 
-  ;;     message-type 
-  ;;     message-source
-  ;;     message-content 
-  ;;     get-dp-message-handler-hash
-  ;;     get-dp-message-handler-hash-sem
-  ;;     set-dp-message-handlers!
-  ;;     register-message-handler 
-  ;;     send-message-co
-  ;;     send-message 
-  ;;     delete-data!
-  ;;--------------------------------------
-  (test-section "manage message handlers")
-  (let* ([num-threads 2]
-         [env (datapool num-threads)])
-    (let*
-      ([test-type 'test-type]
-       [test-content "hello world"]
-       [test-msg (message test-type test-content)])
-      (test-equal? "can get message's type" (message-type test-msg) test-type pr wait)
-      (test-equal? "can get message's content" (message-content test-msg) test-content pr wait)
-      (test-equal? "can get message's source" (message-source test-msg) #f pr wait))
-
-
-    (test-true? "get-dp-message-handler-hash" (hash? (get-dp-message-handler-hash env)) pr wait)
-    (test-true? "get-dp-message-handler-hash-sem" (semaphore? (get-dp-message-handler-hash-sem env)) pr wait)
-
-    (define test-type 'test-type)
-    (define test-source 12)
-    (define callback-form (lambda () 1))
-    (test-equal? "callback check" (callback-form) 1 pr wait)
-
-    (let ([hash-ret (set-dp-message-handlers! env test-type test-source (list (list callback-form test-source #f)))])
-      (test-true? "set-dp-message-handlers!" hash-ret pr wait))
-
-
-    (let ([hash-ret (hash-ref (get-dp-message-handler-hash env) test-type #f)])
-      (test-true? "returned value is a hash" (hash? hash-ret) pr wait)
-      (test-equal? "(and set-dp-message-handlers! get-dp-message-handler-hash) 1" 
-                   ((car (car (hash-ref hash-ret test-source #f))))
-                   (callback-form) 
-                   pr 
-                   wait))
-
-    (define callback-form-2 (lambda () 2))
-    (test-equal? "callback check 2" (callback-form-2) 2 pr wait)
-
-    (set-dp-message-handlers! 
-      env 
-      test-type 
-      test-source
-      (append 
-        (hash-ref (hash-ref (get-dp-message-handler-hash env) test-type) test-source)
-        (list (list callback-form-2 test-source #f))))
-
-    (test-equal? "(and set-dp-message-handlers! get-dp-message-handler-hash) 2" 
-                 (hash-ref (hash-ref (get-dp-message-handler-hash env) test-type) test-source)
-                 (list (list callback-form test-source #f) (list callback-form-2 test-source #f))
-                 pr 
-                 wait)
-    (let ([pre-handlers (list 
-                          (list callback-form test-source #f) 
-                          (list callback-form-2 test-source #f))]
-          [post-handlers (hash-ref (hash-ref (get-dp-message-handler-hash env) test-type) test-source)])
-      (for ([i (length pre-handlers)])
-           (let ([str 
-                   (let ([o (open-output-string)])
-                     (fprintf o "compare callback results ~a" i)
-                     (get-output-string o))])
-             (test-equal? str
-                          ((car (list-ref pre-handlers i)))
-                          ((car (list-ref post-handlers i)))
-                          pr
-                          wait))))
-
-    (define test-class%
-      (class object% 
-             (super-new)
-             (field [test-field 3])
-             (field [test-field2 2])))
-
-    (define test-object (make-object test-class%))
-
-    (let ([hash-size (hash-count (get-data-hash env))])
-      (let ([test-key (register-data! env test-object)])
-        (test-equal? "register-data! object succeeds" test-key 0 pr wait)
-        (test-equal? 
-          "get-data-hash hash-count" 
-          (hash-count (get-data-hash env)) 
-          (+ hash-size 1) 
-          pr 
-          wait)
-
-        (define-coroutine
-          (msg-handler msg)
-          (let*
-            ([cont (message-content msg)]
-             [env (car cont)]
-             [ch (car (cdr cont))]
-             [val (car (cddr cont))]
-             [data-test-key (car (cdddr cont))])
-            (ch-put ch val)
-            (set-data-field! env data-test-key 'test-field (+ val 1))
-            (+ val 2)))
-
-        (let
-          ([test-msg-type 'test-type]
-           [ch (channel)]
-           [test-val 4])
-
-          (register-message-handler env msg-handler test-msg-type #f test-key 'test-field2)
-
-          (test-equal? 
-            "get-dp-message-handler-hash hash-count" 
-            (hash-count (get-dp-message-handler-hash env)) 
-            1
-            pr
-            wait)
-
-          (send-message env (message test-msg-type (list env ch test-val test-key)) #f)
-          (sleep 0.1)
-
-          (test-equal? "ch has expected value" (ch-get ch) test-val pr wait)
-
-          (test-equal? 
-            "data test-field has expected value" 
-            (get-data-field env test-key 'test-field)
-            (+ test-val 1)
-            pr
-            wait)
-
-          (test-equal? 
-            "data test-field2 has expected value" 
-            (get-data-field env test-key 'test-field2)
-            (+ test-val 2)
-            pr
-            wait))
-
-
-        (test-true? "delete-data!" (delete-data! env test-key) pr wait)
-        (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) hash-size pr wait)
-
-        (test-equal? 
-          "get-dp-message-handler-hash hash-count" 
-          (hash-count (get-dp-message-handler-hash env)) 
-          0
-          pr
-          wait)
-        (test-true? "get-data fails" (not (get-data env test-key)) pr wait)))
-    (close-dp env))
-  ;;**************************************
-
-
-  ;;**************************************
-  ;;TEST get-task-q-idx
-  ;;     get-task
-  ;;     dp-thread-exec-task
-  ;;     dp-thread
-  ;;     dp-thread-start
-  ;;-------------------------------------- 
-  (test-section "datapool thread internal functions")
-  (let* ([num-threads 2]
-         [env (datapool num-threads)])
-    (define-coroutine (test-task-co)
-                      3)
-    (define test-task (test-task-co))
-
-    (enqueue! (get-dp-queue env 0) (list test-task #f #f))
-
-    (test-equal? "get-task-q-idx" (get-task-q-idx env 0) 0 pr wait)
-
-    (dequeue! (get-dp-queue env 0))
-    (enqueue! (get-dp-queue env 1) (list test-task #f #f))
-
-    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 1 pr wait)
-    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
-
-    (enqueue! (get-dp-queue env 1) (list test-task #f #f))
-
-    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 1 pr wait)
-    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
-
-    (enqueue! (get-dp-queue env 0) (list test-task #f #f))
-
-    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 0 pr wait)
-    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
-    (let ([len-0 (queue-length (get-dp-queue env 0))]
-          [task (get-task env 0)])
-      (test-true? "get-task" (> len-0 (queue-length (get-dp-queue env 0))) pr wait))
-    (close-dp env))
-  ;;**************************************
-
-
-  ;wait until total task queue lengths == 0
-  (define (wait-len env)
-    (define idxs (list))
-    (for ([i (get-num-dp-threads env)])
-         (set! idxs (append idxs (list i))))
-    (define check-in-time (current-inexact-milliseconds))
-    (define (inner-loop env idxs)
-      (let ([lens (map (lambda (idx) (queue-length (get-dp-queue env idx))) idxs)]
-            [done #t])
-        (for-each 
-          (lambda (len) 
-            (when (> len 0) (set! done #f)))
-          lens)
-        (when (not done)
-          (let ()
-            (when (> (- (current-inexact-milliseconds) check-in-time) 5000)
-              (set! check-in-time (current-inexact-milliseconds))
-              (for ([i idxs])
-                   (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue env i))))
-              ;(printf " ~a; " (queue-length (get-dp-queue env i))))
-              (printf "\nWaiting for all tasks to complete...\n"))
-            (sleep 0.01)
-            (inner-loop env idxs)))))
-    (inner-loop env idxs))
-
-  (define (iterations-per-second milli iter)
-    (/ iter (/ milli 1000)))
-
-
-  ;;**************************************
-  ;;TEST go
-  ;;-------------------------------------- 
-  (test-section "go")
-  (let* ([num-threads 2]
-         [env (datapool num-threads)])
-
-    (let 
-      ([inp-vals (list 'test 'test2 #f "teststring")]
-       [ch (channel)]
-       [inp-vals2 (list 'test3 'test4 #t "teststring2")])
-
-      (define-coroutine 
-        (test-task-co2 ch vals)
-        (for ([val vals])
-             (let ()
-               (printf "Putting ~a in channel\n" val)
-               (ch-put ch val))))
-
-      (go env (test-task-co2 ch inp-vals))
-
-      (sleep 0.1)
-      (wait-len env)
-      (for ([i num-threads])
-           (printf "\n--- tests for thread ~a ---\n" i)
-           (test-true? "Check if dp thread is not dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
-           (test-true? "Check if dp thread is not running" (not (thread-running? (get-dp-thread env 1))) pr wait)
-           (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
-
-
-      (printf "\n")
-      (for ([i (length inp-vals)])
-           (let ([val (list-ref inp-vals i)]
-                 [ret (ch-get ch inp-vals)])
-             (test-equal? "Did expected val get placed in channel" ret val pr wait)))
-
-
-      (go env (test-task-co2 ch inp-vals2))
-      (sleep 0.1)
-
-      (for ([i num-threads])
-           (printf "\n--- tests for thread ~a ---\n" i)
-           (test-true? "Check if dp thread is dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
-           (test-true? "Check if dp thread is actively running" (not (thread-running? (get-dp-thread env 1))) pr wait)
-           (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
-
-      (printf "\n")
-      (for ([i (length inp-vals2)])
-           (let ([val (list-ref inp-vals2 i)]
-                 [ret (ch-get ch #f)])
-             (test-equal? "Did expected val get placed in channel" ret val pr wait))))
-    (close-dp env))
-  ;;**************************************
-
-
-  ;;**************************************
-  ;;TEST go ;stress test
-  ;;--------------------------------------
-  (test-section "go stress test: basic (go) invocations")
-  (let* ([num-threads 8]
-         [env (datapool num-threads)])
-
-    (define-coroutine
-      (test-ro inp-x)
-      (define (inner x)
-        (if (equal? x 0)
-            #t
-            (let ([x (- x 1)])
-              (inner x))))
-      (inner inp-x))
-
-
-    (let ([start-time (current-inexact-milliseconds)]
-          [v 1000]
-          [go-count 0]
-          [iterations 0])
-      (for ([i v])
-           (for ([x i]) 
-                (set! go-count (+ go-count 1))
-                (go env (test-ro x))
-                (set! iterations (+ iterations x)))
-
-           (when (equal? (remainder i 100) 0)
-             (printf "\tfinished i: ~a\n" i)))
-
-      (wait-len env)
-      (for ([i num-threads])
-           (let ([o (open-output-string)])
-             (fprintf o "length q[~a]" i)
-             (test-equal? (get-output-string o) (queue-length (get-dp-queue env i)) 0 pr wait)))
-      (let ([time (- (current-inexact-milliseconds) start-time)])
-        (printf "Benchmark time (milli) for ~a loop iterations. That means u through ~a iterations with i through u (go) calls (each evaluation looping i times, where i is the current (go) iteration), in ~a threads, with no yields or returns: ~a\n" iterations v num-threads time)
-        (printf "(go) invocations: ~a\n" go-count)
-        (printf "loop iterations per second: ~a\n" (iterations-per-second time iterations))))
-
-    (close-dp env)) 
-  ;;--------------------------------------
-
-  ;;**************************************
-  ;;TEST go ;stress test 2
-  ;;--------------------------------------
-
-  (test-section "go stress test 2: timing comparisions for addition")
-  (let* ([num-threads 8]
-         [env (datapool num-threads)])
-
-    (sleep 0.1)
-    (define-coroutine 
-      (go-return x)
-      x)
-
-    (let ([start-time (current-inexact-milliseconds)]
-          [x 8000])
-      (for ([i x])
-           (go env (go-return i)))
-      (wait-len env)
-      (let ([time (- (current-inexact-milliseconds) start-time)])
-        (printf "Benchmark time (milli) for ~a immediately returning (go) operations: ~a\n" x time)
-        (printf "(go) operations per second: ~a\n\n" (iterations-per-second time x))))
-    ;------------------------------------------------------------------------
-    (sleep 0.5)
-
-
-    (let ([x 1000]
-          [inner-x 1000000]) ;1,000,000 
-      (define-coroutine 
-        (eval-x-times env inp-x [do-yield #f])
-        (define (in-loop x)
-          (if (equal? x 0)
-              #t
-              (let ([x (- x 1)])
-                (when do-yield (yield x))
-                (in-loop x))))
-        (in-loop inp-x))
-
-      ;------------------------------------------------------------------------
-      (sleep 0.5)
-
-      (let ([start-time (current-inexact-milliseconds)]
-            [iterations 0])
-        (for ([u num-threads])
-             (for ([i x])
-                  (set! iterations (+ iterations x))
-                  (go env (eval-x-times env x #f))))
-        (wait-len env)
-        (let ([time (- (current-inexact-milliseconds) start-time)])
-          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with (when yield) checks: ~a\n"  (* x num-threads) x num-threads time)
-          (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
-      ;------------------------------------------------------------------------ 
-
-      (sleep 0.5)
-
-      (let ([start-time (current-inexact-milliseconds)]
-            [iterations 0])
-        (for ([i num-threads])
-             (set! iterations (+ iterations inner-x))
-             (go env (eval-x-times env inner-x)))
-        (wait-len env)
-        (let ([time (- (current-inexact-milliseconds) start-time)])
-          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads in coroutine without yield calls: ~a\n"  num-threads inner-x num-threads time)
-          (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
-
-      ;------------------------------------------------------------------------ 
-
-      (sleep 0.5)
-
-      ;parallel processing with futures
-      (define-coroutine
-        (eval-x-times-parallel env inp-x)
-        (define (in-loop x)
-          (if (equal? x 0)
-              #t
-              (in-loop (- x 1))))
-        (future (thunk (in-loop inp-x))))
-
-
-      (let ([start-time (current-inexact-milliseconds)]
-            [iterations 0])
-        (for ([i num-threads])
-             (set! iterations (+ iterations inner-x))
-             (go env (eval-x-times-parallel env inner-x)))
-        (wait-len env)
-        (let ([time (- (current-inexact-milliseconds) start-time)])
-          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads and ~a parallel processed futures: ~a\n"  num-threads inner-x num-threads 8 time)
-          (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations)))))
-    ;------------------------------------------------------------------------ 
-
-    (close-dp env))
-  ;;**************************************
-
-
-  ;;**************************************
-  ;;TEST go stress test 3: collating results
-  ;;--------------------------------------
-  (test-section "go stress test 3: collating results")
-  (let* ([num-threads 8]
-         [env (datapool num-threads)]
-         [x 100000]
-         [ch (channel)])
-
-    ;collate results in a channel
-    (define-coroutine
-      (collate-coroutine ch val)
-      (if (equal? val 0) 
-          (ch-put ch val)
-          (ch-put ch (+ (ch-get ch) val))))
-
-    (let ([start-time (current-inexact-milliseconds)])
-      (for ([i x]) 
-           (let ()
-             (when (equal? 0 (remainder i 10000))
-               (printf "enqueued (go)[~a]\n" i))
-             (go env (collate-coroutine ch i))))
-      (wait-len env)
-      (let ([time (- (current-inexact-milliseconds) start-time)])
-        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared channel: ~a\n"  x 1 num-threads time)
-        (printf "go invocations per second: ~a\n\n" (iterations-per-second time x))))
-
-    ;collate results in the data hash
-    (define collate-class%
-      (class object% 
-             (super-new)
-             (field [val 0])))
-
-    (define collate-object (make-object collate-class%))
-
-    (define-coroutine
-      (ret-val-coroutine val)
-      val)
-
-    (let ([obj-key (register-data! env collate-object)]
-          [start-time (current-inexact-milliseconds)])
-      (for ([i x]) 
-           (let ()
-             (when (equal? 0 (remainder i 100000))
-               (printf "completing data collate (go)[~a]\n" i))
-             (go env (ret-val-coroutine ch i) obj-key 'val)))
-      (wait-len env)
-      (let ([time (- (current-inexact-milliseconds) start-time)])
-        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared hashed object's field: ~a\n"  x 1 num-threads 8 time))
-
-      (test-true? 
-        "Nonzero val stored in shared data object" 
-        (> (get-data-field env obj-key 'val) 0)
-        pr 
-        wait)
-      (printf "Val stored in shared data object: ~a\n" (get-data-field env obj-key 'val)))
-
-    (close-dp env))
-  ;;--------------------------------------
-
-
-  ;;**************************************
-  ;;TEST message handler stress test
-  ;;--------------------------------------
-  (test-section "message handler stress test")
-  (let* ([num-threads 8]
-         [env (datapool num-threads)])
-    (close-dp env))
-  ;;--------------------------------------
-
-
-  ;;;---------------------------------------------------------------------------- 
-  ;;; Feature Tests
-  ;;;---------------------------------------------------------------------------- 
-  ;TODO figure out how to get argv & argc 
-  ;(define dp1 (datapool 4 '(main argv argc)))
-  ;(let ([ch (get-datapool-input-channel dp1)]) 
-  ;(ch-get ch))
-  (test-section "Feature Tests")
-  (let* ([num-threads 8]
-         [env (datapool num-threads)])
-    (close-dp env))
-  ;;;---------------------------------------------------------------------------- 
-
-
-  ;;;---------------------------------------------------------------------------- 
-  ;;; Closing Analysis
-  ;;;---------------------------------------------------------------------------- 
-  (print-test-report))
+(define (load-ut) (load "3-ut.rkt"))
