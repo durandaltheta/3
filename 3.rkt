@@ -62,7 +62,7 @@
   test-fail
   test-pass
   print-test-report
-  run-3-unit-tests)
+  load-ut)
 
 
 
@@ -81,6 +81,23 @@
              (get-output-string o) 
              (current-continuation-marks)))))
 
+
+
+;;;----------------------------------------------------------------------------
+;;; Convenience
+;;;----------------------------------------------------------------------------
+(define get-n-items
+  (lambda (lst num)
+    (if (> num 0)
+        (cons (car lst) (get-n-items (cdr lst) (- num 1)))
+        '()))) ;'
+
+;; api: (slice list first-index length)
+(define slice
+  (lambda (lst start count)
+    (if (> start 1)
+        (slice (cdr lst) (- start 1) count)
+        (get-n-items lst count))))
 
 
 
@@ -499,7 +516,7 @@
           (thread-suspend self))))
     (semaphore-wait (get-dp-queue-sem env q-idx))
     (enqueue! (get-dp-queue env q-idx) (list suspended-coroutine 
-                                             return-key-field-list))
+                                             return-destinations))
     (semaphore-post (get-dp-queue-sem env q-idx))
     (thread-resume (get-dp-thread env q-idx))
     #t))
@@ -580,9 +597,14 @@
 ;;   (list (list example-input-key 'example-input-field))            ;<== give these data values (and the message) as input into example-handler
 ;;   (list (list '#:data ex-destination-key 'ex-destination-field))) ;<== use these to direct where the output from example-handler is stored
 (define (data-changed-type key [field #f])
-  (if field
-      `data-,key-,field-changed
-      `data-,key-changed))
+  (let ([o (open-output-string)])
+    (if field 
+        (let ()
+          (fprintf o "data-~a-~a-changed" key field)
+          (string->symbol (get-output-string o)))
+        (let ()
+          (fprintf o "data-~a-changed" key)
+          (string->symbol (get-output-string o))))))
 
 
 ;; PUBLIC API
@@ -594,7 +616,7 @@
           (semaphore-wait (get-data-sem env))
           (dynamic-set-field! field (get-data env key) val)
           (semaphore-post (get-data-sem env))
-          (send-message env (make-message (data-changed-type key field) field))
+          (send-message env (message (data-changed-type key field) field))
           #t)
         #f)))
 
@@ -847,7 +869,7 @@
     (semaphore-wait (get-data-sem env))
     (when (equal? cur-data 'not-found) ;don't hash if data exists
       (hash-data! env key data)
-      (send-message env (make-message (data-changed-type key) key)))
+      (send-message env (message (data-changed-type key) key)))
     (semaphore-post (get-data-sem env))
     key))
 
@@ -858,9 +880,9 @@
   (if (equal? (get-data env key) 'not-found)
       (let ()
         (semaphore-wait (get-data-sem env))
-        (hash-data! env key data)
+        (hash-data! env key value)
         (semaphore-post (get-data-sem env))
-        (send-message env (make-message (data-changed-type key) data))
+        (send-message env (message (data-changed-type key) value))
         key)
       'not-found))
 
@@ -894,15 +916,15 @@
 
   ;Handle any message returns
   (define (handle-return-message type content src)
-    (send-message env (make-message type content src)))
+    (send-message env (message type content src)))
 
   ;Handle any data returns
   (define (handle-return-data key field val)
     (if field
         ;set object field at data key
-        (set-data-field! env first-val second-val val)
+        (set-data-field! env key field val)
         ;replace data at key
-        (set-data! env first-val val)))
+        (set-data! env key val)))
 
   ;Handle any channel returns
   (define (handle-return-channel ch val)
@@ -917,33 +939,31 @@
           (case type
             ['#:message 
              (if (equal? (length dest) 3)
-                 (let ([type cadr dest]
-                       [source caddr dest])
-                   (let ()
-                     (handle-return-message type source)
-                     (error "Incorrect number of arguments in '#:message (go) handler" (length dest)))))]
+                 (let ([type (cadr dest)]
+                       [source (caddr dest)])
+                   (handle-return-message type source))
+                 (error "Incorrect number of arguments in '#:message (go) handler" (length dest)))]
             ['#:data 
              (if (equal? (length dest) 3)
                  (let ([key (cadr dest)]
                        [field (caddr dest)])
-                   (let ()
-                     (handle-return-message key field val)
-                     (error "Incorrect number of arguments in '#:data (go) handler" (length dest)))))]
+                   (handle-return-message key field val))
+                 (error "Incorrect number of arguments in '#:data (go) handler" (length dest)))]
             ['#:channel 
              (if (equal? (length dest) 2)
                  (let ([ch (cadr dest)])
-                   (handle-return-channel ch val)
-                   (error "Incorrect number of arguments in '#:channel (go) handler" (length dest))))]
+                   (handle-return-channel ch val))
+                 (error "Incorrect number of arguments in '#:channel (go) handler" (length dest)))]
             [else (error "Invalid type in (go) return handler" type)]))))
 
   ;Get subset lists that can be handled (lowest common list length between
   ;return-dests and return-vals) and attempt to handle the return value
   (define (handle-go-returns-intern return-dests return-vals)
     (let ([vals (if (< (length return-dests) (length return-vals))
-                    (left return-vals (length return-dests))
+                    (slice return-vals 0 (length return-dests))
                     return-vals)]
           [dests (if (> (length return-dests) (length return-vals))
-                     (left return-dests (length return-vals))
+                     (slice return-dests 0 (length return-vals))
                      return-dests)])
       (for ([val vals]
             [dest dests])
@@ -998,7 +1018,7 @@
             (handle-go-returns env return-dests return-vals))
           #t)
         (let ()
-          (go env co ret-key ret-field) ;place task at the back of a queue
+          (go env co return-dests) ;place task at the back of a queue
           #f))))
 
 
@@ -1046,4 +1066,6 @@
 ;;;---------------------------------------------------------------------------- 
 ;;; TESTING - 3 unit tests
 ;;;---------------------------------------------------------------------------- 
-(define (load-ut) (load "3-ut.rkt"))
+(define (load-ut) 
+  (parameterize ([current-namespace (make-base-namespace)])
+    (load "3-ut.rkt")))

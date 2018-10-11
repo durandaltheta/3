@@ -1,3 +1,22 @@
+(require "3.rkt")
+(provide
+  test-test-functions
+  test-coroutines
+  test-channels
+  test-datapool-intern
+  test-datapool-getters-setters
+  test-task-queues
+  test-data-hash
+  test-message-handlers
+  test-datapool-threads
+  test-g)
+  test-go-stress
+  test-go-stress-2
+  test-go-stress-3
+  test-message-handler-stress
+  test-feature
+  run-3-unit-tests)
+
 (define pr #t)
 (define wait #f)
 
