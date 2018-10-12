@@ -909,8 +909,7 @@
 ;If a return value is '#:invalid, then the specific destination handler is 
 ;skipped.
 (define (handle-go-returns env return-dests return-vals)
-  (printf "handle-go-returns 1\n")
-
+  ;If return-vals is a single atom put it in a list
   (when (not (list? return-vals))
     (set! return-vals (list return-vals)))
 
@@ -953,7 +952,7 @@
              (if (equal? (length dest) 3)
                  (let ([key (cadr dest)]
                        [field (caddr dest)])
-                   (handle-return-message key field val))
+                   (handle-return-data key field val))
                  (error "Incorrect number of arguments in '#:data (go) handler" (length dest)))]
             ['#:channel 
              (if (equal? (length dest) 2)

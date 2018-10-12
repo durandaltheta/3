@@ -885,17 +885,11 @@
 
 
     (let ([start-time (current-inexact-milliseconds)]
-          [v 1000]
-          [go-count 0]
-          [iterations 0])
+          [v 100000])
       (for ([i v])
-           (for ([x i]) 
-                (set! go-count (+ go-count 1))
-                (go env (test-ro x))
-                (set! iterations (+ iterations x)))
-
-           (when (equal? (remainder i 100) 0)
-             (printf "\tfinished i: ~a\n" i)))
+           (when (and (equal? (remainder i 10000) 0) (not (equal? i 0)))
+             (printf "\tenqueued (go) i: ~a\n" i))
+           (go env (test-ro v)))
 
       (wait-len env)
       (for ([i num-threads])
@@ -903,9 +897,8 @@
              (fprintf o "length q[~a]" i)
              (test-equal? (get-output-string o) (queue-length (get-dp-queue env i)) 0 pr wait)))
       (let ([time (- (current-inexact-milliseconds) start-time)])
-        (printf "Benchmark time (milli) for ~a loop iterations. That means u through ~a iterations with i through u (go) calls (each evaluation looping i times, where i is the current (go) iteration), in ~a threads, with no yields or returns: ~a\n" iterations v num-threads time)
-        (printf "(go) invocations: ~a\n" go-count)
-        (printf "loop iterations per second: ~a\n" (iterations-per-second time iterations))))
+        (printf "Benchmark time (milli) for ~a (go) calls each iterating ~a times on ~a threads with no yields or returns\n" v v num-threads)
+        (printf "loop iterations per second: ~a\n" (iterations-per-second time (* v v)))))
 
     (close-dp env)))
 ;;--------------------------------------
@@ -919,11 +912,34 @@
   (let* ([num-threads 8]
          [env (datapool num-threads)])
 
-    (sleep 0.1)
-    (define-coroutine 
-      (go-return x)
-      x)
 
+    ;return immediately
+    (define-coroutine (go-return x) x)
+
+    ;evaluate x times
+    (define-coroutine 
+      (eval-x-times env inp-target [do-yield #f])
+      (define (in-loop x target)
+        (if (equal? x target)
+            #t
+            (let ([new-x (+ x 1)])
+              (when do-yield (yield x))
+              (in-loop new-x target))))
+      (in-loop 0 inp-target))
+
+    ;parallel processing with futures
+    (define-coroutine
+      (eval-x-times-parallel env inp-target)
+      (define (in-loop x target)
+        (if (equal? x target)
+            #t
+            (let ([new-x (+ x 1)])
+              (in-loop new-x target))))
+      (future (thunk (in-loop 0 inp-target))))
+
+
+    ;------------------------------------------------------------------------
+    (sleep 0.1)
     (let ([start-time (current-inexact-milliseconds)]
           [x 8000])
       (for ([i x])
@@ -932,75 +948,52 @@
       (let ([time (- (current-inexact-milliseconds) start-time)])
         (printf "Benchmark time (milli) for ~a immediately returning (go) operations: ~a\n" x time)
         (printf "(go) operations per second: ~a\n\n" (iterations-per-second time x))))
-    ;------------------------------------------------------------------------
-    (sleep 0.5)
 
 
-    (let ([x 1000]
-          [inner-x 1000000]) ;1,000,000 
-      (define-coroutine 
-        (eval-x-times env inp-x [do-yield #f])
-        (define (in-loop x)
-          (if (equal? x 0)
-              #t
-              (let ([x (- x 1)])
-                (when do-yield (yield x))
-                (in-loop x))))
-        (in-loop inp-x))
+    (let ([x 1000000]) ;1,000,000 
 
-      ;------------------------------------------------------------------------
+
+      ;------------------------------------------------------------------------ 
+      ;Test eval-x-times with yields
       (sleep 0.5)
-
       (let ([start-time (current-inexact-milliseconds)]
-            [iterations 0])
+            [iterations (* num-threads x)])
         (for ([u num-threads])
-             (for ([i x])
-                  (set! iterations (+ iterations x))
-                  (go env (eval-x-times env x #f))))
+             (go env (eval-x-times env x #t)))
+
         (wait-len env)
         (let ([time (- (current-inexact-milliseconds) start-time)])
-          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with (when yield) checks: ~a\n"  (* x num-threads) x num-threads time)
+          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with (yield) calls: ~a\n"  num-threads x num-threads time)
           (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
+
+
       ;------------------------------------------------------------------------ 
-
+      ;Test eval-x-times without yields
       (sleep 0.5)
+      (let ([start-time (current-inexact-milliseconds)]
+            [iterations (* num-threads x)])
+        (for ([i num-threads])
+             (go env (eval-x-times env x #f)))
 
+        (wait-len env)
+        (let ([time (- (current-inexact-milliseconds) start-time)])
+          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads in coroutine without (yield) calls: ~a\n"  num-threads x num-threads time)
+          (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
+
+
+      ;------------------------------------------------------------------------ 
+      ;Test eval-x-times-parallel
+      (sleep 0.5)
       (let ([start-time (current-inexact-milliseconds)]
             [iterations 0])
         (for ([i num-threads])
-             (set! iterations (+ iterations inner-x))
-             (go env (eval-x-times env inner-x)))
+             (set! iterations (+ iterations x))
+             (go env (eval-x-times-parallel env x)))
         (wait-len env)
         (let ([time (- (current-inexact-milliseconds) start-time)])
-          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads in coroutine without yield calls: ~a\n"  num-threads inner-x num-threads time)
+          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads and ~a parallel processed futures: ~a\n"  num-threads x num-threads 8 time)
           (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
-
-      ;------------------------------------------------------------------------ 
-
-      (sleep 0.5)
-
-      ;parallel processing with futures
-      (define-coroutine
-        (eval-x-times-parallel env inp-x)
-        (define (in-loop x)
-          (if (equal? x 0)
-              #t
-              (in-loop (- x 1))))
-        (future (thunk (in-loop inp-x))))
-
-
-      (let ([start-time (current-inexact-milliseconds)]
-            [iterations 0])
-        (for ([i num-threads])
-             (set! iterations (+ iterations inner-x))
-             (go env (eval-x-times-parallel env inner-x)))
-        (wait-len env)
-        (let ([time (- (current-inexact-milliseconds) start-time)])
-          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads and ~a parallel processed futures: ~a\n"  num-threads inner-x num-threads 8 time)
-          (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations)))))
-    ;------------------------------------------------------------------------ 
-
-    (close-dp env)))
+      (close-dp env))))
 ;;-------------------------------------- 
 
 
