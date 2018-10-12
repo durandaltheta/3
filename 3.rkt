@@ -981,7 +981,10 @@
 ;;;----------------------------------------------------------------------------
 ;;; COMPUTATION - thread functions
 ;;;----------------------------------------------------------------------------
-;;; threads
+;;; threads 
+
+(define sanity-debug #f)
+
 ;; Return thread's queue index if not empty, otherwise gets the index of the 
 ;; fullest queue.
 (define (get-task-q-idx env thread-idx)
@@ -1014,18 +1017,23 @@
 ;; that coroutine does not (yield) intelligently this may have no effect.
 ;; Returns: #t if task completed, #f if task not yet completed
 (define (dp-thread-exec-task env thread-idx task)
-  (let* ([co (car task)]
-         [return-dests (cadr task)]
-         [return-vals (co)])
-    (if (co 'dead?) ;check if coroutine is dead 
-        (let () ;task completed 
-          (when (and return-dests return-vals)
-            (handle-go-returns env return-dests return-vals))
-          #t)
-        (let ()
-          (go env co return-dests) ;place task at the back of a queue
-          #f))))
-
+  (let ([co (car task)]
+        [return-dests (cadr task)])
+    (when sanity-debug (printf "1\n"))
+    (let ([return-vals (co)]) ;execution step
+      (when sanity-debug (printf "2, return-vals: ~a\n" return-vals))
+      (let ([dead (co 'dead?)]) 
+        (when sanity-debug (printf "3, dead: ~a\n" dead))
+        (if dead ;check if coroutine is dead 
+            (let () ;task completed 
+              (when sanity-debug (printf "4, completed\n"))
+              (when (and return-dests return-vals)
+                (handle-go-returns env return-dests return-vals))
+              #t)
+            (let ()
+              (when sanity-debug (printf "4, yield\n"))
+              (go env co return-dests) ;place task at the back of a queue
+              #f))))))
 
 ;; Eternal thread tail recursion of executing tasks
 (define (dp-thread env thread-idx) 
@@ -1071,6 +1079,35 @@
 ;;;---------------------------------------------------------------------------- 
 ;;; TESTING - 3 unit tests
 ;;;---------------------------------------------------------------------------- 
+
+;wait until total task queue lengths == 0
+(define (wait-len env)
+  (define idxs (list))
+  (for ([i (get-num-dp-threads env)])
+       (set! idxs (append idxs (list i))))
+  (define check-in-time (current-inexact-milliseconds))
+  (define (inner-loop env idxs)
+    (let ([lens (map (lambda (idx) (queue-length (get-dp-queue env idx))) idxs)]
+          [done #t])
+      (for-each 
+        (lambda (len) 
+          (when (> len 0) (set! done #f)))
+        lens)
+      (when (not done)
+        (let ()
+          (when (> (- (current-inexact-milliseconds) check-in-time) 5000)
+            (set! check-in-time (current-inexact-milliseconds))
+            (for ([i idxs])
+                 (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue env i))))
+            ;(printf " ~a; " (queue-length (get-dp-queue env i))))
+            (set! sanity-debug #t)
+            (printf "\nWaiting for all tasks to complete...\n"))
+          (sleep 0.01)
+          (inner-loop env idxs)))))
+  (inner-loop env idxs)
+  (set! sanity-debug #f))
+
+(define (iterations-per-second milli iter) (/ iter (/ milli 1000)))
 (define pr #t)
 (define wait #f)
 

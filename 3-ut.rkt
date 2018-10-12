@@ -1,34 +1,3 @@
-
-
-;wait until total task queue lengths == 0
-(define (wait-len env)
-  (define idxs (list))
-  (for ([i (get-num-dp-threads env)])
-       (set! idxs (append idxs (list i))))
-  (define check-in-time (current-inexact-milliseconds))
-  (define (inner-loop env idxs)
-    (let ([lens (map (lambda (idx) (queue-length (get-dp-queue env idx))) idxs)]
-          [done #t])
-      (for-each 
-        (lambda (len) 
-          (when (> len 0) (set! done #f)))
-        lens)
-      (when (not done)
-        (let ()
-          (when (> (- (current-inexact-milliseconds) check-in-time) 5000)
-            (set! check-in-time (current-inexact-milliseconds))
-            (for ([i idxs])
-                 (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue env i))))
-            ;(printf " ~a; " (queue-length (get-dp-queue env i))))
-            (printf "\nWaiting for all tasks to complete...\n"))
-          (sleep 0.01)
-          (inner-loop env idxs)))))
-  (inner-loop env idxs))
-
-(define (iterations-per-second milli iter)
-  (/ iter (/ milli 1000)))
-
-
 ;;**************************************
 ;;TEST defined?
 ;;     test-true? 
@@ -184,7 +153,7 @@
 (define (test-datapool-intern)
   (test-section "datapool data constructor, getter, and destructor functions")
   ;Make a datapool
-  (let* ([num-threads 2]
+  (let* ([num-threads 8]
          [env (datapool num-threads)]) 
 
     ;;------------------------------------- 
@@ -192,7 +161,7 @@
     (test-equal?
       "number of threads"
       (vector-ref (vector-ref (unbox-dp-env env) 0) 0)
-      2
+      8
       pr
       wait)
 
@@ -916,14 +885,24 @@
     ;return immediately
     (define-coroutine (go-return x) x)
 
-    ;evaluate x times
+    ;evaluate x times, yielding each time
     (define-coroutine 
-      (eval-x-times env inp-target [do-yield #f])
+      (eval-x-times-yield env inp-target)
       (define (in-loop x target)
         (if (equal? x target)
             #t
             (let ([new-x (+ x 1)])
-              (when do-yield (yield x))
+              (yield x)
+              (in-loop new-x target))))
+      (in-loop 0 inp-target))
+
+    ;evaluate x times
+    (define-coroutine 
+      (eval-x-times env inp-target)
+      (define (in-loop x target)
+        (if (equal? x target)
+            #t
+            (let ([new-x (+ x 1)])
               (in-loop new-x target))))
       (in-loop 0 inp-target))
 
@@ -939,9 +918,9 @@
 
 
     ;------------------------------------------------------------------------
-    (sleep 0.1)
+    (sleep 1.0)
     (let ([start-time (current-inexact-milliseconds)]
-          [x 8000])
+          [x 100000])
       (for ([i x])
            (go env (go-return i)))
       (wait-len env)
@@ -955,11 +934,11 @@
 
       ;------------------------------------------------------------------------ 
       ;Test eval-x-times with yields
-      (sleep 0.5)
+      (sleep 1.0)
       (let ([start-time (current-inexact-milliseconds)]
             [iterations (* num-threads x)])
         (for ([u num-threads])
-             (go env (eval-x-times env x #t)))
+             (go env (eval-x-times-yield env x)))
 
         (wait-len env)
         (let ([time (- (current-inexact-milliseconds) start-time)])
@@ -969,11 +948,11 @@
 
       ;------------------------------------------------------------------------ 
       ;Test eval-x-times without yields
-      (sleep 0.5)
+      (sleep 1.0)
       (let ([start-time (current-inexact-milliseconds)]
             [iterations (* num-threads x)])
         (for ([i num-threads])
-             (go env (eval-x-times env x #f)))
+             (go env (eval-x-times env x)))
 
         (wait-len env)
         (let ([time (- (current-inexact-milliseconds) start-time)])
@@ -985,9 +964,8 @@
       ;Test eval-x-times-parallel
       (sleep 0.5)
       (let ([start-time (current-inexact-milliseconds)]
-            [iterations 0])
+            [iterations (* num-threads x)])
         (for ([i num-threads])
-             (set! iterations (+ iterations x))
              (go env (eval-x-times-parallel env x)))
         (wait-len env)
         (let ([time (- (current-inexact-milliseconds) start-time)])
@@ -1107,4 +1085,5 @@
 
   (print-test-report))
 
-(run-3-unit-tests)
+(test-go-stress-2)
+;(run-3-unit-tests)
