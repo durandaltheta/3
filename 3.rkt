@@ -62,7 +62,7 @@
   test-fail
   test-pass
   print-test-report
-  load-ut)
+  run-ut)
 
 
 
@@ -1066,6 +1066,12 @@
 ;;;---------------------------------------------------------------------------- 
 ;;; TESTING - 3 unit tests
 ;;;---------------------------------------------------------------------------- 
-(define (load-ut) 
-  (parameterize ([current-namespace (make-base-namespace)])
+(define pr #t)
+(define wait #f)
+
+(define-namespace-anchor a)
+(define (run-ut [print-results #t] [wait-on-fail #f]) 
+  (set! pr print-results)
+  (set! wait wait-on-fail)
+  (parameterize ([current-namespace (namespace-anchor->namespace a)])
     (load "3-ut.rkt")))

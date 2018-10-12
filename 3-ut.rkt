@@ -1,24 +1,4 @@
-(require "3.rkt")
-(provide
-  test-test-functions
-  test-coroutines
-  test-channels
-  test-datapool-intern
-  test-datapool-getters-setters
-  test-task-queues
-  test-data-hash
-  test-message-handlers
-  test-datapool-threads
-  test-g)
-  test-go-stress
-  test-go-stress-2
-  test-go-stress-3
-  test-message-handler-stress
-  test-feature
-  run-3-unit-tests)
 
-(define pr #t)
-(define wait #f)
 
 ;wait until total task queue lengths == 0
 (define (wait-len env)
@@ -77,7 +57,7 @@
   (let ([arg1 3]
         [arg2 4])
 
-    (set! test-num 1)
+    (define test-num 1)
 
     (define-coroutine
       (co-test1) 
@@ -1093,10 +1073,7 @@
 
 ;; PUBLIC API
 (define 
-  (run-3-unit-tests [print-results #t] [wait-on-fail #f])
-
-  (set! pr print-results)
-  (set! wait wait-on-fail)
+  (run-3-unit-tests)
   (reset-test-results)
 
   (test-test-functions)
@@ -1116,3 +1093,5 @@
   (test-feature)
 
   (print-test-report))
+
+(run-3-unit-tests)
