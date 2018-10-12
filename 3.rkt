@@ -39,7 +39,7 @@
   go ;place a coroutine in a queue to be executed by a thread 
 
   ;;;DATA
-  define-data! ;register given object in the datapool
+  register-data! ;register given object in the datapool
   delete-data! ;delete object and all callbacks pointing to it via its key
   get-data ;get whatever data is in the data hash at provided key
   set-data! ;redefine whatever data is in the data hash at the provided key to the provided value
@@ -62,7 +62,7 @@
   test-fail
   test-pass
   print-test-report
-  run-ut)
+  run-3-ut)
 
 
 
@@ -575,14 +575,14 @@
 ;; Get the value of a data object's field
 (define (get-data-field env key field)
   (let ([data (get-data env key)])
-    (if (not (equal? data 'not-found))
+    (if (equal? data 'not-found)
+        data
         (let 
           ([ret 'not-found])
           (semaphore-wait (get-data-sem env))
           (set! ret (dynamic-get-field field data))
           (semaphore-post (get-data-sem env))
-          ret)
-        data)))
+          ret))))
 
 
 ;; PUBLIC API 
@@ -623,9 +623,7 @@
 
 ;; Hash data object at provided key
 (define (hash-data! env data-key data)
-  (semaphore-wait (get-data-sem env))
   (hash-set! (get-data-hash env) data-key data)
-  (semaphore-post (get-data-sem env))
   #t)
 
 
@@ -863,15 +861,18 @@
 
 ;; PUBLIC API
 ;; Register new data object with the datapool and return the data's new key
-(define (define-data! env data)
+(define (register-data! env data)
   (let* ([key (gen-dp-data-obj-key env)]
-         [cur-data (get-data env key)])
+         [cur-data (get-data env key)]
+         [ret #f])
     (semaphore-wait (get-data-sem env))
     (when (equal? cur-data 'not-found) ;don't hash if data exists
-      (hash-data! env key data)
-      (send-message env (message (data-changed-type key) key)))
+      (let ()
+        (hash-data! env key data)
+        (send-message env (message (data-changed-type key) key))
+        (set! ret key)))
     (semaphore-post (get-data-sem env))
-    key))
+    ret))
 
 
 ;; PUBLIC API
@@ -908,6 +909,11 @@
 ;If a return value is '#:invalid, then the specific destination handler is 
 ;skipped.
 (define (handle-go-returns env return-dests return-vals)
+  (printf "handle-go-returns 1\n")
+
+  (when (not (list? return-vals))
+    (set! return-vals (list return-vals)))
+
   ;Pop off the front of a list, returning the popped value and resulting list
   (define (pop-list inp-list)
     (if (null? inp-list)
@@ -1014,7 +1020,7 @@
          [return-vals (co)])
     (if (co 'dead?) ;check if coroutine is dead 
         (let () ;task completed 
-          (when return-dests
+          (when (and return-dests return-vals)
             (handle-go-returns env return-dests return-vals))
           #t)
         (let ()
@@ -1070,7 +1076,7 @@
 (define wait #f)
 
 (define-namespace-anchor a)
-(define (run-ut [print-results #t] [wait-on-fail #f]) 
+(define (run-3-ut [print-results #t] [wait-on-fail #f]) 
   (set! pr print-results)
   (set! wait wait-on-fail)
   (parameterize ([current-namespace (namespace-anchor->namespace a)])

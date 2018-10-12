@@ -548,14 +548,14 @@
 ;;**************************************
 ;;TEST hash-data!
 ;;     get-data  
-;;     define-data!
+;;     register-data!
 ;;-------------------------------------- 
 (define (test-data-hash)
   (test-section "manage data objects")
   (let* ([num-threads 2]
-         [env (datapool num-threads)]) 
-
-    (define test-key 1337)
+         [env (datapool num-threads)]
+         [test-key 1337]
+         [test-key2 64]) 
 
     (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) 0 pr wait)
     (test-true? "hash-data! number" (hash-data! env test-key 3) pr wait)
@@ -569,25 +569,34 @@
              (define/public (get-3) 3-field)))
 
     (define test-object (make-object test-class%))
+    (define test-val 1990)
 
     (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) 1 pr wait)
     (test-true? "hash-data! 1" (hash-data! env test-key test-object) pr wait)
-    (test-true? "hash-data! 2" (hash-data! env test-key test-object) pr wait)
+    (test-true? "hash-data! 2" (hash-data! env test-key2 test-val) pr wait)
 
     (test-equal? "get-data 1" (send (get-data env test-key) get-3) 3 pr wait)
-    (test-true? "get-data 2" (not (get-data env 1)) pr wait) 
+    (test-equal? "get-data 2" (get-data env test-key2) test-val pr wait) 
 
     (set-field! 3-field (get-data env test-key) 2)
     (test-equal? "set-field succeeded?" (get-field 3-field (get-data env test-key)) 2 pr wait) 
 
 
+    (define test-class2%
+      (class object% (super-new)
+             (field [3-field 4])))
+
+    (define test-object2 (make-object test-class2%))
+
     (let ([hash-size (hash-count (get-data-hash env))])
-      (let ([key (define-data! env test-object)])
-        (test-equal? "define-data! object succeeds" key 0 pr wait)
+      (let ([key (register-data! env test-object2)])
+        (test-equal? "register-data! object succeeds" key 0 pr wait)
+        (test-equal? "get-data succeeds for test-object2" (get-data env key) test-object2 pr wait)
+        (test-equal? "get-data-field succeeds for test-object2" (get-data-field env key '3-field) 4 pr wait)
         (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) (+ hash-size 1) pr wait)))
     (let ([hash-size (hash-count (get-data-hash env))])
-      (let ([key (define-data! env test-object)])
-        (test-equal? "define-data! object succeeds" key 1 pr wait)
+      (let ([key (register-data! env test-object)])
+        (test-equal? "register-data! object succeeds" key 1 pr wait)
         (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) (+ hash-size 1) pr wait)))
     (close-dp env)))
 ;;**************************************
@@ -680,8 +689,8 @@
     (define test-object (make-object test-class%))
 
     (let ([hash-size (hash-count (get-data-hash env))])
-      (let ([test-key (define-data! env test-object)])
-        (test-equal? "define-data! object succeeds" test-key 0 pr wait)
+      (let ([test-key (register-data! env test-object)])
+        (test-equal? "register-data! object succeeds" test-key 0 pr wait)
         (test-equal? 
           "get-data-hash hash-count" 
           (hash-count (get-data-hash env)) 
@@ -703,10 +712,17 @@
 
         (let
           ([test-msg-type 'test-type]
+           [test-source-key 3]
            [ch (channel)]
            [test-val 4])
 
-          (define-message-handler env msg-handler test-msg-type #f test-key 'test-field2)
+          (define-message-handler 
+            env 
+            msg-handler 
+            test-msg-type 
+            test-source-key
+            #f
+            (list (list '#:data test-key 'test-field2)))
 
           (test-equal? 
             "get-dp-message-handler-hash hash-count" 
@@ -715,7 +731,11 @@
             pr
             wait)
 
-          (send-message env (message test-msg-type (list env ch test-val test-key)) #f)
+          (send-message 
+            env 
+            (message test-msg-type (list env ch test-val test-key)) 
+            test-source-key)
+
           (sleep 0.1)
 
           (test-equal? "ch has expected value" (ch-get ch) test-val pr wait)
@@ -1024,7 +1044,7 @@
       (ret-val-coroutine val)
       val)
 
-    (let ([obj-key (define-data! env collate-object)]
+    (let ([obj-key (register-data! env collate-object)]
           [start-time (current-inexact-milliseconds)])
       (for ([i x]) 
            (let ()
