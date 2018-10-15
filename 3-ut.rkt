@@ -877,7 +877,7 @@
 ;;TEST go ;stress test 2
 ;;-------------------------------------- 
 (define (test-go-stress-2)
-  (test-section "go stress test 2: timing comparisions for addition")
+  (test-section "go stress test 2: timing comparisons for addition")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
 
@@ -892,7 +892,7 @@
         (if (equal? x target)
             #t
             (let ([new-x (+ x 1)])
-              (yield x)
+              (when (equal? (remainder x 10000)) (yield x))
               (in-loop new-x target))))
       (in-loop 0 inp-target))
 
@@ -921,8 +921,10 @@
     (sleep 1.0)
     (let ([start-time (current-inexact-milliseconds)]
           [x 100000])
+
       (for ([i x])
            (go env (go-return i)))
+
       (wait-len env)
       (let ([time (- (current-inexact-milliseconds) start-time)])
         (printf "Benchmark time (milli) for ~a immediately returning (go) operations: ~a\n" x time)
@@ -937,12 +939,13 @@
       (sleep 1.0)
       (let ([start-time (current-inexact-milliseconds)]
             [iterations (* num-threads x)])
+
         (for ([u num-threads])
              (go env (eval-x-times-yield env x)))
 
         (wait-len env)
         (let ([time (- (current-inexact-milliseconds) start-time)])
-          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with (yield) calls: ~a\n"  num-threads x num-threads time)
+          (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with (yield) calls every 10000 iterations: ~a\n"  num-threads x num-threads time)
           (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
 
 
@@ -965,8 +968,10 @@
       (sleep 0.5)
       (let ([start-time (current-inexact-milliseconds)]
             [iterations (* num-threads x)])
+
         (for ([i num-threads])
              (go env (eval-x-times-parallel env x)))
+
         (wait-len env)
         (let ([time (- (current-inexact-milliseconds) start-time)])
           (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads and ~a parallel processed futures: ~a\n"  num-threads x num-threads 8 time)
