@@ -387,6 +387,9 @@
                (make-semaphore 1))))) ;thread task queue semaphores 
     ret)) ;return a 'by reference' symbol
 
+;; Global for maximum datapool task queue size
+(define *MAX-DP-QUEUE-SIZE* 255)
+
 
 ;; Return the datapool's environment data
 (define (unbox-dp-env env)
@@ -509,7 +512,7 @@
              (set! datapool-worker #t)))
 
       (when (not datapool-worker)
-        (when (> (queue-length (get-dp-queue env q-idx)) 255)
+        (when (>= (queue-length (get-dp-queue env q-idx)) *MAX-DP-QUEUE-SIZE*)
           (semaphore-wait (get-waiting-threads-queue-sem env))
           (enqueue! (get-waiting-threads-queue env) self)
           (semaphore-post (get-waiting-threads-queue-sem env))
@@ -1051,7 +1054,9 @@
               thread-idx 
               task)))))
 
-  (when (> (queue-length (get-waiting-threads-queue env)) 0)
+  ;; Attempt to restart threads waiting to enqueue a (go) task
+  (when (and (> (queue-length (get-waiting-threads-queue env)) 0)
+             (< (queue-length (get-dp-queue env (get-min-dp-q-idx env))) *MAX-DP-QUEUE-SIZE*))
     (semaphore-wait (get-waiting-threads-queue-sem env))
     (let ([thread (dequeue! (get-waiting-threads-queue env))])
       (when (not (thread-dead? thread)) ;throw out any dead threads
@@ -1077,11 +1082,14 @@
 ;;; TESTING - 3 unit tests
 ;;;---------------------------------------------------------------------------- 
 
+(define (print-queue-lens env)
+  (printf "\n")
+  (for ([i (get-num-dp-threads env)])
+       (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue env i))))
+  (printf "\n\n"))
+
 ;wait until total task queue lengths == 0
 (define (wait-len env)
-  (define (print-queue-lens env)
-    (for ([i idxs])
-         (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue env i)))))
   (define idxs (list))
   (for ([i (get-num-dp-threads env)])
        (set! idxs (append idxs (list i))))
@@ -1105,7 +1113,6 @@
           (inner-loop env idxs)))))
   (inner-loop env idxs)
   (print-queue-lens env)
-  (printf "\n")
   (set! sanity-debug #f))
 
 (define (iterations-per-second milli iter) (/ iter (/ milli 1000)))

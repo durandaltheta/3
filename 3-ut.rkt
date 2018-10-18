@@ -487,6 +487,7 @@
     (test-equal? "q-len idx 1" (queue-length (get-dp-queue env 1)) 0 pr wait)
 
     (enqueue! (get-dp-queue env 0) (list (test-task) #f #f))
+    (print-queue-lens env)
 
     ;q0-size: 1, q1-size: 0
     (test-equal? "get-min-dp-q-idx 2" (get-min-dp-q-idx env) 1 pr wait)
@@ -495,6 +496,7 @@
     (test-equal? "q-len idx 1" (queue-length (get-dp-queue env 1)) 0 pr wait)
 
     (enqueue! (get-dp-queue env 1) (list (test-task) #f #f))
+    (print-queue-lens env)
 
     ;q0-size: 1, q1-size: 1
     (test-equal? "get-min-dp-q-idx 3" (get-min-dp-q-idx env) 0 pr wait)
