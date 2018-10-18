@@ -892,7 +892,7 @@
         (if (equal? x target)
             #t
             (let ([new-x (+ x 1)])
-              (when (equal? (remainder x 10000)) (yield x))
+              (when (equal? (remainder x 10000) 0) (yield x))
               (in-loop new-x target))))
       (in-loop 0 inp-target))
 
@@ -1090,5 +1090,5 @@
 
   (print-test-report))
 
-(test-go-stress-2)
-;(run-3-unit-tests)
+;(test-go-stress-2)
+(run-3-unit-tests)
