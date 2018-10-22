@@ -685,12 +685,8 @@
       #f))
 
 
-;; Set the message handlers list for msg-type and src-key to something new
-(define (set-dp-message-handlers! env msg-type src-key handlers) 
-  ;; Take message sem first because another message handler may be using the 
-  ;; data object sem, which would cause us to lock up
-  (semaphore-wait (get-dp-message-handler-hash-sem env))
-  (semaphore-wait (get-data-sem env))
+;; Does not check for semaphores
+(define (set-dp-message-handlers-intern! env msg-type src-key handlers)
   (define ret #t)
 
   ;; If msg-type hash doesn't exist create it
@@ -729,7 +725,18 @@
                 (hash-ref 
                   (get-dp-message-handler-hash env) 
                   msg-type) 
-                src-key handlers)))
+                src-key handlers))))
+
+
+;; Set the message handlers list for msg-type and src-key to something new
+(define (set-dp-message-handlers! env msg-type src-key handlers) 
+  ;; Take message sem first because another message handler may be using the 
+  ;; data object sem, which would cause us to lock up
+  (semaphore-wait (get-dp-message-handler-hash-sem env))
+  (semaphore-wait (get-data-sem env))
+
+  (set-dp-message-handlers-intern! env msg-type src-key handlers)
+
   (semaphore-post (get-data-sem env))
   (semaphore-post (get-dp-message-handler-hash-sem env))
   #t)
@@ -829,6 +836,23 @@
 ;; Data destructor. Removes message handlers, removes the data from the data 
 ;; hash, and enqueues the now free data key onto a free floating key queue
 (define (delete-data! env data-key) 
+  ; Return #t if input is an atom
+  (define (atom? x)
+    (and (not (null? x))
+         (not (pair? x))))
+
+  ; Return #t if element is in list tree
+  (define (find-in-tree tree element)
+    (if (atom? tree)
+        (if (equal? element tree) 
+            #t 
+            #f)
+        (let ([left (car tree)]
+              [right (cdr tree)])
+          (if (find-in-tree left element) 
+              #t 
+              (find-in-tree right element)))))
+
   (let ([data (get-data env data-key)])
     (if (not (equal? data 'not-found)) ;if data exists
         (let ()
@@ -837,19 +861,38 @@
           (semaphore-wait (get-dp-message-handler-hash-sem env))
           (semaphore-wait (get-data-sem env))
 
-          ;Remove any hash where data-key is the src-key 
           (hash-for-each 
             (get-dp-message-handler-hash env)
-            (lambda (msg-type cur-hash)
-              (hash-remove! (hash-ref (get-dp-message-handler-hash env) msg-type) data-key)))
-
-          ;Remove all callbacks to data-key 
-          (hash-for-each 
-            (get-dp-message-handler-hash env) 
             (lambda (msg-type msg-type-hash)
+              ;Remove any hash where data-key is the src-key 
               (hash-remove! msg-type-hash data-key)
-              (when
-                (equal? (hash-count msg-type-hash) 0)
+
+              ;Remove any callback where input-data or return-destinations 
+              ;references data-key
+              (hash-for-each 
+                msg-type-hash
+                (lambda (src-key callbacks)
+                  ;generate list of callbacks that don't include deleted key
+                  (let ([filtered-callback-list
+                          (filter 
+                            (lambda (current-callback)
+                              (not (find-in-tree 
+                                     current-callback 
+                                     data-key)))
+                            callbacks)])
+                    (let ()
+                      (if (null? filtered-callback-list)
+                          ;when filtered list is empty delete hash entry
+                          (hash-remove! msg-type-hash src-key) 
+                          ;replace callbacks with list with deleted key removed
+                          (set-dp-message-handlers-intern! 
+                            env 
+                            msg-type 
+                            src-key
+                            filtered-callback-list))))))
+
+              ;Delete message type entry at top level if child hash is empty
+              (when (equal? (hash-count msg-type-hash) 0) 
                 (hash-remove! (get-dp-message-handler-hash env) msg-type))))
 
           ;Remove the data from the hash
@@ -857,6 +900,7 @@
           (semaphore-post (get-data-sem env))
           (semaphore-post (get-dp-message-handler-hash-sem env))
 
+          ;Add data key to internal free floating queue of available keys
           (add-free-dp-data-key env data-key)
           #t)
         #f))) 
@@ -984,8 +1028,8 @@
 ;;;----------------------------------------------------------------------------
 ;;; COMPUTATION - thread functions
 ;;;----------------------------------------------------------------------------
-;;; threads 
 
+;; Test flag
 (define sanity-debug #f)
 
 ;; Return thread's queue index if not empty, otherwise gets the index of the 
@@ -1025,12 +1069,10 @@
     (let ([return-vals (co)])
       (if (co 'dead?) ;check if coroutine is dead 
           (let () ;task completed 
-            (when sanity-debug (printf "dp-thread-exec-task 1, return-vals: ~a\n" return-vals))
             (when (and return-dests return-vals)
               (handle-go-returns env return-dests return-vals))
             #t)
           (let ()
-            (when sanity-debug (printf "dp-thread-exec-task 2, return-vals: ~a\n" return-vals))
             (go env co return-dests) ;place task at the back of a queue
             #f)))))
 
@@ -1081,14 +1123,14 @@
 ;;;---------------------------------------------------------------------------- 
 ;;; TESTING - 3 unit tests
 ;;;---------------------------------------------------------------------------- 
-
+;; Print out the lengths of all datapool environment worker task queues
 (define (print-queue-lens env)
   (printf "\n")
   (for ([i (get-num-dp-threads env)])
        (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue env i))))
   (printf "\n\n"))
 
-;wait until total task queue lengths == 0
+;; Wait until total task queue lengths == 0
 (define (wait-len env)
   (define idxs (list))
   (for ([i (get-num-dp-threads env)])
@@ -1115,7 +1157,6 @@
   (print-queue-lens env)
   (set! sanity-debug #f))
 
-(define (iterations-per-second milli iter) (/ iter (/ milli 1000)))
 (define pr #t)
 (define wait #f)
 

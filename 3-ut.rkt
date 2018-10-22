@@ -1,4 +1,14 @@
 ;;**************************************
+;; Test Prep
+;;--------------------------------------
+
+;; Calculate iterations per second
+(define (iterations-per-second milli iter) (/ iter (/ milli 1000)))
+;;**************************************
+
+
+
+;;**************************************
 ;;TEST defined?
 ;;     test-true? 
 ;;     test-equal?
@@ -17,6 +27,7 @@
     (test-equal? "test-equal? 4" "test" "test" pr wait)
     (test-equal? "test-equal? 5" 'test 'test pr wait)))
 ;;**************************************
+
 
 ;;**************************************
 ;;TEST coroutine
@@ -476,6 +487,9 @@
   (let* ([num-threads 2]
          [env (datapool num-threads)])
 
+    ;;Wait for worker threads to put themselves to sleep
+    (sleep 0.1)
+
     ;;Arbitrary coroutine to execute
     (define-coroutine (test-task) #t)
 
@@ -582,10 +596,6 @@
 ;;     get-dp-message-handler-hash
 ;;     get-dp-message-handler-hash-sem
 ;;     set-dp-message-handlers!
-;;     define-message-handler 
-;;     send-message-co
-;;     send-message 
-;;     delete-data!
 ;;-------------------------------------- 
 (define (test-message-handlers)
   (test-section "manage message handlers")
@@ -595,20 +605,42 @@
       ([test-type 'test-type]
        [test-content "hello world"]
        [test-msg (message test-type test-content)])
-      (test-equal? "can get message's type" (message-type test-msg) test-type pr wait)
-      (test-equal? "can get message's content" (message-content test-msg) test-content pr wait)
-      (test-equal? "can get message's source" (message-source test-msg) #f pr wait))
+      (test-equal? "can get message's type" 
+                   (message-type test-msg) 
+                   test-type 
+                   pr 
+                   wait)
+      (test-equal? "can get message's content" 
+                   (message-content test-msg) 
+                   test-content 
+                   pr 
+                   wait)
+      (test-equal? "can get message's source" 
+                   (message-source test-msg) 
+                   #f 
+                   pr 
+                   wait))
 
 
-    (test-true? "get-dp-message-handler-hash" (hash? (get-dp-message-handler-hash env)) pr wait)
-    (test-true? "get-dp-message-handler-hash-sem" (semaphore? (get-dp-message-handler-hash-sem env)) pr wait)
+    (test-true? "get-dp-message-handler-hash" 
+                (hash? (get-dp-message-handler-hash env)) 
+                pr 
+                wait)
+    (test-true? "get-dp-message-handler-hash-sem" 
+                (semaphore? (get-dp-message-handler-hash-sem env)) 
+                pr 
+                wait)
 
     (define test-type 'test-type)
     (define test-source 12)
     (define callback-form (lambda () 1))
     (test-equal? "callback check" (callback-form) 1 pr wait)
 
-    (let ([hash-ret (set-dp-message-handlers! env test-type test-source (list (list callback-form test-source #f)))])
+    (let ([hash-ret (set-dp-message-handlers! 
+                      env 
+                      test-type 
+                      test-source 
+                      (list (list callback-form test-source #f)))])
       (test-true? "set-dp-message-handlers!" hash-ret pr wait))
 
 
@@ -628,18 +660,27 @@
       test-type 
       test-source
       (append 
-        (hash-ref (hash-ref (get-dp-message-handler-hash env) test-type) test-source)
+        (hash-ref 
+          (hash-ref (get-dp-message-handler-hash env) test-type) 
+          test-source)
         (list (list callback-form-2 test-source #f))))
 
     (test-equal? "(and set-dp-message-handlers! get-dp-message-handler-hash) 2" 
-                 (hash-ref (hash-ref (get-dp-message-handler-hash env) test-type) test-source)
-                 (list (list callback-form test-source #f) (list callback-form-2 test-source #f))
+                 (hash-ref 
+                   (hash-ref (get-dp-message-handler-hash env) test-type) 
+                   test-source)
+                 (list 
+                   (list callback-form test-source #f) 
+                   (list callback-form-2 test-source #f))
                  pr 
                  wait)
     (let ([pre-handlers (list 
                           (list callback-form test-source #f) 
                           (list callback-form-2 test-source #f))]
-          [post-handlers (hash-ref (hash-ref (get-dp-message-handler-hash env) test-type) test-source)])
+          [post-handlers 
+            (hash-ref 
+              (hash-ref (get-dp-message-handler-hash env) test-type) 
+              test-source)])
       (for ([i (length pre-handlers)])
            (let ([str 
                    (let ([o (open-output-string)])
@@ -649,8 +690,19 @@
                           ((car (list-ref pre-handlers i)))
                           ((car (list-ref post-handlers i)))
                           pr
-                          wait))))
+                          wait))))))
 
+
+;;**************************************
+;;TEST define-message-handler 
+;;     send-message-co
+;;     send-message 
+;;     delete-data!
+;;-------------------------------------- 
+(define (test-message-handlers-2)
+  (test-section "manage message handlers 2")
+  (let* ([num-threads 2]
+         [env (datapool num-threads)])
     (define test-class%
       (class object% 
              (super-new)
@@ -725,9 +777,12 @@
             pr
             wait))
 
-
         (test-true? "delete-data!" (delete-data! env test-key) pr wait)
-        (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) hash-size pr wait)
+        (test-equal? "get-data-hash hash-count" 
+                     (hash-count (get-data-hash env)) 
+                     hash-size 
+                     pr 
+                     wait)
 
         (test-equal? 
           "get-dp-message-handler-hash hash-count" 
@@ -735,7 +790,7 @@
           0
           pr
           wait)
-        (test-true? "get-data fails" (not (get-data env test-key)) pr wait)))
+        (test-equal? "get-data fails" (get-data env test-key) 'not-found pr wait)))
     (close-dp env)))
 ;;**************************************
 
@@ -776,7 +831,10 @@
     (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
     (let ([len-0 (queue-length (get-dp-queue env 0))]
           [task (get-task env 0)])
-      (test-true? "get-task" (> len-0 (queue-length (get-dp-queue env 0))) pr wait))
+      (test-true? "get-task succeeds in pulling a task from the queue" 
+                  (> len-0 (queue-length (get-dp-queue env 0))) 
+                  pr 
+                  wait))
     (close-dp env)))
 ;;**************************************
 
@@ -846,7 +904,7 @@
          [env (datapool num-threads)])
 
     (define-coroutine
-      (test-ro inp-x)
+      (test-routine inp-x)
       (define (inner x)
         (if (equal? x 0)
             #t
@@ -860,7 +918,7 @@
       (for ([i v])
            (when (and (equal? (remainder i 10000) 0) (not (equal? i 0)))
              (printf "\tenqueued (go) i: ~a\n" i))
-           (go env (test-ro v)))
+           (go env (test-routine v)))
 
       (wait-len env)
       (for ([i num-threads])
@@ -992,12 +1050,11 @@
          [x 100000]
          [ch (channel)])
 
+    ;------------------------------------------------------------------------ 
     ;collate results in a channel
     (define-coroutine
       (collate-coroutine ch val)
-      (if (equal? val 0) 
-          (ch-put ch val)
-          (ch-put ch (+ (ch-get ch) val))))
+        (ch-put ch val))
 
     (let ([start-time (current-inexact-milliseconds)])
       (for ([i x]) 
@@ -1010,11 +1067,12 @@
         (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared channel: ~a\n"  x 1 num-threads time)
         (printf "go invocations per second: ~a\n\n" (iterations-per-second time x))))
 
-    ;collate results in the data hash
+    ;------------------------------------------------------------------------ 
+    ;write results in the data hash
     (define collate-class%
       (class object% 
              (super-new)
-             (field [val 0])))
+             (field [val (channel)])))
 
     (define collate-object (make-object collate-class%))
 
@@ -1026,19 +1084,22 @@
           [start-time (current-inexact-milliseconds)])
       (for ([i x]) 
            (let ()
-             (when (equal? 0 (remainder i 100000))
-               (printf "completing data collate (go)[~a]\n" i))
-             (go env (ret-val-coroutine ch i) obj-key 'val)))
+             (when (equal? 0 (remainder i 10000))
+               (printf "enqueue data collate (go)[~a]\n" i))
+             (go env (ret-val-coroutine i) (list (list '#:channel (get-data-field obj-key 'val))))))
       (wait-len env)
       (let ([time (- (current-inexact-milliseconds) start-time)])
-        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared hashed object's field: ~a\n"  x 1 num-threads 8 time))
+        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared hashed object's field: ~a\n"  x 1 num-threads time))
 
       (test-true? 
         "Nonzero val stored in shared data object" 
-        (> (get-data-field env obj-key 'val) 0)
+        (not (equal? (get-data-field env obj-key 'val) 'not-found))
         pr 
         wait)
       (printf "Val stored in shared data object: ~a\n" (get-data-field env obj-key 'val)))
+    
+    ;------------------------------------------------------------------------ 
+    ;handle results in the data hash using message handler
 
     (close-dp env)))
 ;;--------------------------------------
@@ -1082,6 +1143,7 @@
   (test-task-queues)
   (test-data-hash)
   (test-message-handlers)
+  (test-message-handlers-2)
   (test-datapool-threads)
   (test-go)
   (test-go-stress)
@@ -1092,5 +1154,5 @@
 
   (print-test-report))
 
-;(test-go-stress-2)
-(run-3-unit-tests)
+(test-go-stress-3)
+;(run-3-unit-tests)
