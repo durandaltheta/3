@@ -1086,13 +1086,17 @@
            (let ()
              (when (equal? 0 (remainder i 10000))
                (printf "enqueue data collate (go)[~a]\n" i))
-             (go env (ret-val-coroutine i) (list (list '#:channel (get-data-field obj-key 'val))))))
+             (go 
+               env 
+               (ret-val-coroutine i) 
+               (list 
+                 (list '#:channel (get-data-field env obj-key 'val))))))
       (wait-len env)
       (let ([time (- (current-inexact-milliseconds) start-time)])
         (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared hashed object's field: ~a\n"  x 1 num-threads time))
 
       (test-true? 
-        "Nonzero val stored in shared data object" 
+        "val stored in shared data object" 
         (not (equal? (get-data-field env obj-key 'val) 'not-found))
         pr 
         wait)
@@ -1154,5 +1158,4 @@
 
   (print-test-report))
 
-(test-go-stress-3)
-;(run-3-unit-tests)
+(run-3-unit-tests)
