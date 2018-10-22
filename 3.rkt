@@ -11,16 +11,15 @@
 
 
 ;;;TODO:
-;;; 1. Test edge cases in UTs for data hash, message handlers, go return destinations
-;;; 2. Split datapool data from datapool cpu threads 
-;;; 3. Put everything in structs to make internal implementation less brittle
-;;; 4. Implement coroutine scheduler thread (sends signal to thread running oldest coroutine to (yield) when there are tasks waiting in the queues and no new task has been taken from a queue in x milli)
-;;; 5. Improve (go) efficiency 
-;;; 6. Implement and improve error handling
-;;; 7. Implement input argument santization
-;;; 8. Possibly improve hash and/or queue efficiency
-;;; 9. Implement improvements based on feedback
-;;; 10. Convert to C library (requires custom code for several components not supported by out of the box C)
+;;; 1. Split datapool data from datapool cpu threads 
+;;; 2. Put everything in structs to make internal implementation less brittle
+;;; 3. Implement coroutine scheduler thread (sends signal to thread running oldest coroutine to (yield) when there are tasks waiting in the queues and no new task has been taken from a queue in x milli)
+;;; 4. Improve (go) efficiency 
+;;; 5. Implement and improve error handling
+;;; 6. Implement input argument santization
+;;; 7. Possibly improve hash and/or queue efficiency
+;;; 8. Implement improvements based on feedback
+;;; 9. Convert to C library (requires custom code for several components not supported by out of the box C)
 
 (provide 
   ;;;DATAPOOL
@@ -1015,7 +1014,7 @@
              (if (equal? (length dest) 3)
                  (let ([type (cadr dest)]
                        [source (caddr dest)])
-                   (handle-return-message type source))
+                   (handle-return-message type val source))
                  (error "Incorrect number of arguments in '#:message (go) handler" (length dest)))]
             ['#:data 
              (if (equal? (length dest) 3)

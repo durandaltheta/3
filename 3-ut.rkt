@@ -851,13 +851,41 @@
              [data-test-key (car (cdddr cont))])
             (ch-put ch val)
             (set-data-field! env data-test-key 'test-field (+ val 1))
-            (+ val 2)))
+            (list (+ val 2) 7)))
 
         (let
-          ([test-msg-type 'test-type]
+          ([test-msg-type 'test-msg-type]
+           [test-msg-type-2 'test-msg-type-2]
            [test-source-key 3]
+           [test-source-key-2 8]
            [ch (channel)]
            [test-val 4])
+
+          (define-coroutine 
+            (catch-msg msg)
+            (test-equal? "destination message type correct" 
+                         (message-type msg)
+                         test-msg-type-2 
+                         pr
+                         wait)
+            (test-equal? "destination message source correct" 
+                         (message-source msg)
+                         test-source-key-2
+                         pr 
+                         wait)
+            (test-equal? "destination message content correct" 
+                         (message-content msg)
+                         7
+                         pr 
+                         wait))
+
+          (define-message-handler 
+            env 
+            catch-msg 
+            test-msg-type-2
+            test-source-key-2
+            #f 
+            #f)
 
           (define-message-handler 
             env 
@@ -865,12 +893,13 @@
             test-msg-type 
             test-source-key
             #f
-            (list (list '#:data test-key 'test-field2)))
+            (list (list '#:data test-key 'test-field2)
+                  (list '#:message test-msg-type-2 test-source-key-2)))
 
           (test-equal? 
             "get-dp-message-handler-hash hash-count" 
             (hash-count (get-dp-message-handler-hash env)) 
-            1
+            2
             pr
             wait)
 
@@ -906,7 +935,7 @@
         (test-equal? 
           "get-dp-message-handler-hash hash-count" 
           (hash-count (get-dp-message-handler-hash env)) 
-          0
+          1
           pr
           wait)
         (test-equal? "get-data fails" (get-data env test-key) 'not-found pr wait)
@@ -999,8 +1028,7 @@
     (print "test handler arg: ~a\n" (message-content msg)))
 
 
-  ;1. delete-data! data-key where message handler has source set to data-key 
-  ;removes handler from handler hash 
+  (printf "1. delete-data! data-key where message handler has source set to data-key removes handler from handler hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1035,8 +1063,7 @@
         wait))
     (close-dp env))
 
-  ;2. delete-data! data-key where message handlers have source set to 
-  ;data-key removes handlers from handler hash 
+  (printf "2. delete-data! data-key where message handlers have source set to data-key removes handlers from handler hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1072,8 +1099,7 @@
         wait))
     (close-dp env))
 
-  ;3. delete-data! data-key where message handler does *not* have source set 
-  ;to data-key remains in handler hash
+  (printf "3. delete-data! data-key where message handler does *not* have source set to data-key remains in handler hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1108,8 +1134,7 @@
         wait))
     (close-dp env))
 
-  ;4. delete-data! data-key where message handlers do *not* have source set 
-  ;to data-key remain in handler hash
+  (printf "4. delete-data! data-key where message handlers do *not* have source set to data-key remain in handler hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1145,8 +1170,7 @@
         wait))
     (close-dp env))
 
-  ;5. delete-data! data-key where 1 handler has source set to data-key and 
-  ;another handler does not, only deletes the first handler 
+  (printf "5. delete-data! data-key where 1 handler has source set to data-key and another handler does not, only deletes the first handler\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1211,8 +1235,7 @@
     (print "test handler arg: ~a\n" (message-content msg)))
 
 
-  ;1. delete-data! data-key where message handler has input-data set to 
-  ;data-key deletes handler from hash 
+  (printf "1. delete-data! data-key where message handler has input-data set to data-key deletes handler from hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1247,8 +1270,7 @@
         wait))
     (close-dp env))
 
-  ;2. delete-data! data-key where message handlers have input-data set to 
-  ;data-key deletes handlers from hash 
+  (printf "2. delete-data! data-key where message handlers have input-data set to data-key deletes handlers from hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1284,8 +1306,7 @@
         wait))
     (close-dp env))
 
-  ;3. delete-data! data-key where message handler does not have input-data to
-  ;data-key does *not* delete handler from hash 
+  (printf "3. delete-data! data-key where message handler does not have input-data to data-key does *not* delete handler from hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1320,8 +1341,7 @@
         wait))
     (close-dp env))
 
-  ;4. delete-data! data-key where message handlers do not have input-data set 
-  ;to data-key does *not* delete handlers from hash 
+  (printf "4. delete-data! data-key where message handlers do not have input-data set to data-key does *not* delete handlers from hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1357,8 +1377,7 @@
         wait))
     (close-dp env))
 
-  ;5. delete-data! data-key where 1 handler has input-data set to data-key 
-  ;and another handler does not, only deletes the first handler 
+  (printf "5. delete-data! data-key where 1 handler has input-data set to data-key and another handler does not, only deletes the first handler\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1423,8 +1442,7 @@
     (print "test handler arg: ~a\n" (message-content msg)))
 
 
-  ;1. delete data-key where message handler has return-destinations set to 
-  ;data-key deletes handler from hash 
+  (printf "1. delete data-key where message handler has return-destinations set to data-key deletes handler from hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1459,8 +1477,7 @@
         wait))
     (close-dp env))
 
-  ;2. delete data-key where message handlers have return-destinations set to 
-  ;data-key deletes handlers from hash 
+  (printf "2. delete data-key where message handlers have return-destinations set to data-key deletes handlers from hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1496,8 +1513,7 @@
         wait))
     (close-dp env))
 
-  ;3. delete data-key where message handler does not have return-destinations 
-  ;to data-key does *not* delete handler from hash 
+  (printf "3. delete data-key where message handler does not have return-destinations to data-key does *not* delete handler from hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1532,8 +1548,7 @@
         wait))
     (close-dp env))
 
-  ;4. delete data-key where message handler does not have return-destinations 
-  ;to data-key does *not* delete handler from hash 
+  (printf "4. delete data-key where message handler does not have return-destinations to data-key does *not* delete handler from hash\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
@@ -1569,8 +1584,7 @@
         wait))
     (close-dp env))
 
-  ;5. delete data-key where 1 handler has return-destinations set to data-key 
-  ;and another handler does not, only deletes the first handler 
+  (printf "5. delete data-key where 1 handler has return-destinations set to data-key and another handler does not, only deletes the first handler\n")
   (let* ([num-threads 8]
          [env (datapool num-threads)])
     (let ([test-data-key (register-data! env test-object)])
