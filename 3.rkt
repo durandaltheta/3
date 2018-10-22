@@ -12,14 +12,15 @@
 
 ;;;TODO:
 ;;; 1. Test edge cases in UTs for data hash, message handlers, go return destinations
-;;; 2. Put everything in structs to make internal implementation less brittle
-;;; 3. Implement coroutine scheduler thread (sends signal to thread running oldest coroutine to (yield) when there are tasks waiting in the queues and no new task has been taken from a queue in x milli)
-;;; 4. Improve (go) efficiency 
-;;; 5. Implement and improve error handling
-;;; 6. Implement input argument santization
-;;; 7. Possibly improve hash and/or queue efficiency
-;;; 8. Implement improvements based on feedback
-;;; 9. Convert to C library (requires custom code for several components not supported by out of the box C)
+;;; 2. Split datapool data from datapool cpu threads 
+;;; 3. Put everything in structs to make internal implementation less brittle
+;;; 4. Implement coroutine scheduler thread (sends signal to thread running oldest coroutine to (yield) when there are tasks waiting in the queues and no new task has been taken from a queue in x milli)
+;;; 5. Improve (go) efficiency 
+;;; 6. Implement and improve error handling
+;;; 7. Implement input argument santization
+;;; 8. Possibly improve hash and/or queue efficiency
+;;; 9. Implement improvements based on feedback
+;;; 10. Convert to C library (requires custom code for several components not supported by out of the box C)
 
 (provide 
   ;;;DATAPOOL
@@ -804,21 +805,42 @@
     #t))
 
 
+;; return list of data obtained from datapool based on given key-field pairs
+(define (get-input-data env input-key-field-list)
+  (map 
+    (lambda (data-key-field-pair) 
+      (let ([key (car data-key-field-pair)]
+            [field (cadr data-key-field-pair)])
+        (if field 
+            (get-data-field env key field)
+            (get-data env key))))
+    input-key-field-list))
+
+
 ;; coroutine to manage sending messages to connected handlers
 (define-coroutine 
   (send-message-co env msg src-key)
+  ;(define (get-dp-message-handlers env msg-type src-key)
   (let ([handlers (get-dp-message-handlers 
                     env
-                    (get-field type msg)
+                    (message-type msg)
                     src-key)])
     (if handlers
         (let ()
           (map
             (lambda (i)
               (let ([handler (car i)]
-                    [input-key-field-list (car (cdr i))]
-                    [return-key-field-list (car (cddr i))])
-                (go env (handler msg) return-key-field-list)))
+                    [input-key-field-list (cadr i)]
+                    [return-key-field-list (caddr i)])
+                (if input-key-field-list 
+                    ;if input-key-field-list exists, grab the data and pass to 
+                    ;handler coroutine alongside the message
+                    (go 
+                      env 
+                      (handler msg (get-input-data env input-key-field-list)) 
+                      return-key-field-list)
+                    ;otherwise just pass the message to the coroutine
+                    (go env (handler msg) return-key-field-list))))
             handlers)
           #t)
         #f)))
@@ -826,8 +848,8 @@
 
 ;; PUBLIC API
 ;; Send a message to connected handlers in the current datapool
-(define (send-message env msg [src-key #f])
-  (go env (send-message-co env msg src-key)))
+(define (send-message env msg)
+  (go env (send-message-co env msg (message-source msg))))
 
 
 ;; PUBLIC API
@@ -845,11 +867,13 @@
         (if (equal? element tree) 
             #t 
             #f)
-        (let ([left (car tree)]
-              [right (cdr tree)])
-          (if (find-in-tree left element) 
-              #t 
-              (find-in-tree right element)))))
+        (if (pair? tree)
+            (let ([left (car tree)]
+                  [right (cdr tree)])
+              (if (find-in-tree left element) 
+                  #t 
+                  (find-in-tree right element)))
+            #f)))
 
   (let ([data (get-data env data-key)])
     (if (not (equal? data 'not-found)) ;if data exists

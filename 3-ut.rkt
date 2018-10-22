@@ -588,6 +588,106 @@
 
 
 ;;**************************************
+;;TEST get-task-q-idx
+;;     get-task
+;;     dp-thread-exec-task
+;;     dp-thread
+;;     dp-thread-start
+;;-------------------------------------- 
+(define (test-datapool-threads)
+  (test-section "datapool thread internal functions")
+  (let* ([num-threads 2]
+         [env (datapool num-threads)])
+    (define-coroutine (test-task-co)
+                      3)
+    (define test-task (test-task-co))
+
+    (enqueue! (get-dp-queue env 0) (list test-task #f #f))
+
+    (test-equal? "get-task-q-idx" (get-task-q-idx env 0) 0 pr wait)
+
+    (dequeue! (get-dp-queue env 0))
+    (enqueue! (get-dp-queue env 1) (list test-task #f #f))
+
+    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 1 pr wait)
+    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
+
+    (enqueue! (get-dp-queue env 1) (list test-task #f #f))
+
+    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 1 pr wait)
+    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
+
+    (enqueue! (get-dp-queue env 0) (list test-task #f #f))
+
+    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 0 pr wait)
+    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
+    (let ([len-0 (queue-length (get-dp-queue env 0))]
+          [task (get-task env 0)])
+      (test-true? "get-task succeeds in pulling a task from the queue" 
+                  (> len-0 (queue-length (get-dp-queue env 0))) 
+                  pr 
+                  wait))
+    (close-dp env)))
+;;**************************************
+
+
+;;**************************************
+;;TEST go
+;;-------------------------------------- 
+(define (test-go)
+  (test-section "go")
+  (let* ([num-threads 2]
+         [env (datapool num-threads)])
+
+    (let 
+      ([inp-vals (list 'test 'test2 #f "teststring")]
+       [ch (channel)]
+       [inp-vals2 (list 'test3 'test4 #t "teststring2")])
+
+      (define-coroutine 
+        (test-task-co2 ch vals)
+        (for ([val vals])
+             (let ()
+               (printf "Putting ~a in channel\n" val)
+               (ch-put ch val))))
+
+      (go env (test-task-co2 ch inp-vals))
+
+      (sleep 0.1)
+      (wait-len env)
+      (for ([i num-threads])
+           (printf "\n--- tests for thread ~a ---\n" i)
+           (test-true? "Check if dp thread is not dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
+           (test-true? "Check if dp thread is not running" (not (thread-running? (get-dp-thread env 1))) pr wait)
+           (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
+
+
+      (printf "\n")
+      (for ([i (length inp-vals)])
+           (let ([val (list-ref inp-vals i)]
+                 [ret (ch-get ch inp-vals)])
+             (test-equal? "Did expected val get placed in channel" ret val pr wait)))
+
+
+      (go env (test-task-co2 ch inp-vals2))
+      (sleep 0.1)
+
+      (for ([i num-threads])
+           (printf "\n--- tests for thread ~a ---\n" i)
+           (test-true? "Check if dp thread is dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
+           (test-true? "Check if dp thread is actively running" (not (thread-running? (get-dp-thread env 1))) pr wait)
+           (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
+
+      (printf "\n")
+      (for ([i (length inp-vals2)])
+           (let ([val (list-ref inp-vals2 i)]
+                 [ret (ch-get ch #f)])
+             (test-equal? "Did expected val get placed in channel" ret val pr wait))))
+    (close-dp env)))
+;;**************************************
+
+
+;;**************************************
 ;;TEST message%
 ;;     message 
 ;;     message-type 
@@ -690,7 +790,8 @@
                           ((car (list-ref pre-handlers i)))
                           ((car (list-ref post-handlers i)))
                           pr
-                          wait))))))
+                          wait))))
+    (close-dp env)))
 
 
 ;;**************************************
@@ -703,6 +804,7 @@
   (test-section "manage message handlers 2")
   (let* ([num-threads 2]
          [env (datapool num-threads)])
+
     (define test-class%
       (class object% 
              (super-new)
@@ -720,6 +822,24 @@
           (+ hash-size 1) 
           pr 
           wait)
+
+        ;Test various coroutine return-destination strategies work
+
+
+
+
+
+        ;!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ;!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ;!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ;TODO: test '#:message return-destination variation works
+        ;!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ;!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ;!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+
+
 
         (define-coroutine
           (msg-handler msg)
@@ -756,8 +876,7 @@
 
           (send-message 
             env 
-            (message test-msg-type (list env ch test-val test-key)) 
-            test-source-key)
+            (message test-msg-type (list env ch test-val test-key) test-source-key))
 
           (sleep 0.1)
 
@@ -790,107 +909,707 @@
           0
           pr
           wait)
-        (test-equal? "get-data fails" (get-data env test-key) 'not-found pr wait)))
+        (test-equal? "get-data fails" (get-data env test-key) 'not-found pr wait)
+
+
+
+        ;test input-data field correctly passes input data to message handler
+        (let ([out-ch (channel)]
+              [test-msg-type 'test-type]) 
+
+          (set! test-object (make-object test-class%))
+          (set! test-key (register-data! env test-object))
+
+          (define-coroutine
+            (msg-handler-2 msg input-data)
+            (list (car input-data) (cadr input-data) (caddr input-data)))
+
+          (define-message-handler 
+            env 
+            msg-handler-2
+            test-msg-type 
+            #f
+            (list 
+              (list test-key 'test-field2)
+              (list test-key 'test-field)
+              (list test-key #f))
+            (list 
+              (list '#:channel out-ch)
+              (list '#:channel out-ch)
+              (list '#:channel out-ch)))
+
+          (send-message env (message test-msg-type #f))
+
+          (sleep 0.1)
+
+          (let ([ret1 (ch-get out-ch)])
+            (test-true? "channel content exists"
+                        (not (equal? ret1 'not-found))
+                        pr 
+                        wait)
+
+            (test-equal? "channel content equals test-field2" 
+                         (get-data-field env test-key 'test-field2)
+                         ret1
+                         pr 
+                         wait))
+
+          (let ([ret2 (ch-get out-ch)])
+            (test-true? "channel content exists"
+                        (not (equal? ret2 'not-found))
+                        pr 
+                        wait)
+            (test-equal? "channel content equals test-field" 
+                         (get-data-field env test-key 'test-field)
+                         ret2
+                         pr 
+                         wait))
+
+          (let ([ret3 (ch-get out-ch)])
+            (test-true? "channel content exists"
+                        (not (equal? ret3 'not-found))
+                        pr 
+                        wait)
+            (test-equal? "channel content equals test-object" 
+                         (get-data env test-key)
+                         ret3
+                         pr 
+                         wait)))))
     (close-dp env)))
 ;;**************************************
 
 
 ;;**************************************
-;;TEST get-task-q-idx
-;;     get-task
-;;     dp-thread-exec-task
-;;     dp-thread
-;;     dp-thread-start
+;;TEST mange message handlers 3: delete message handlers with deleted key set to source
 ;;-------------------------------------- 
-(define (test-datapool-threads)
-  (test-section "datapool thread internal functions")
-  (let* ([num-threads 2]
+(define (test-message-handlers-3)
+  (test-section "manage message handlers 3: delete message handlers with deleted key set to source")
+
+  ;setup test data
+  (define test-class%
+    (class object% 
+           (super-new)))
+
+  (define test-object (make-object test-class%))
+
+  (define test-message-type 'test-message-type)
+
+  (define-coroutine 
+    (test-handler msg)
+    (print "test handler arg: ~a\n" (message-content msg)))
+
+
+  ;1. delete-data! data-key where message handler has source set to data-key 
+  ;removes handler from handler hash 
+  (let* ([num-threads 8]
          [env (datapool num-threads)])
-    (define-coroutine (test-task-co)
-                      3)
-    (define test-task (test-task-co))
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
 
-    (enqueue! (get-dp-queue env 0) (list test-task #f #f))
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              test-data-key 
+                              #f
+                              #f)
 
-    (test-equal? "get-task-q-idx" (get-task-q-idx env 0) 0 pr wait)
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env)) 
+        1
+        pr
+        wait)
 
-    (dequeue! (get-dp-queue env 0))
-    (enqueue! (get-dp-queue env 1) (list test-task #f #f))
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
 
-    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 1 pr wait)
-    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait))
+    (close-dp env))
 
-    (enqueue! (get-dp-queue env 1) (list test-task #f #f))
+  ;2. delete-data! data-key where message handlers have source set to 
+  ;data-key removes handlers from handler hash 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
 
-    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 1 pr wait)
-    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
+      (for ([i 3])
+           (define-message-handler env 
+                                   test-handler 
+                                   test-message-type
+                                   test-data-key 
+                                   #f
+                                   #f))
 
-    (enqueue! (get-dp-queue env 0) (list test-task #f #f))
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
 
-    (test-equal? "get-task-q-idx 0" (get-task-q-idx env 0) 0 pr wait)
-    (test-equal? "get-task-q-idx 1" (get-task-q-idx env 1) 1 pr wait)
-    (let ([len-0 (queue-length (get-dp-queue env 0))]
-          [task (get-task env 0)])
-      (test-true? "get-task succeeds in pulling a task from the queue" 
-                  (> len-0 (queue-length (get-dp-queue env 0))) 
-                  pr 
-                  wait))
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait))
+    (close-dp env))
+
+  ;3. delete-data! data-key where message handler does *not* have source set 
+  ;to data-key remains in handler hash
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              (+ test-data-key 1)
+                              #f
+                              #f)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait))
+    (close-dp env))
+
+  ;4. delete-data! data-key where message handlers do *not* have source set 
+  ;to data-key remain in handler hash
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (for ([i 3])
+           (define-message-handler env 
+                                   test-handler 
+                                   test-message-type
+                                   (+ test-data-key 1)
+                                   #f
+                                   #f))
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait))
+    (close-dp env))
+
+  ;5. delete-data! data-key where 1 handler has source set to data-key and 
+  ;another handler does not, only deletes the first handler 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              test-data-key
+                              #f
+                              #f)
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              (+ test-data-key 1)
+                              #f
+                              #f)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait))
+
     (close-dp env)))
 ;;**************************************
 
 
 ;;**************************************
-;;TEST go
+;;TEST mange message handlers 4: delete message handlers with deleted key set to input-data
 ;;-------------------------------------- 
-(define (test-go)
-  (test-section "go")
-  (let* ([num-threads 2]
+(define (test-message-handlers-4)
+  (test-section "manage message handlers 4: delete message handlers with deleted key set to input-data")
+
+  ;setup test data
+  (define test-class%
+    (class object% 
+           (super-new)))
+
+  (define test-object (make-object test-class%))
+
+  (define test-message-type 'test-message-type)
+
+  (define-coroutine 
+    (test-handler msg)
+    (print "test handler arg: ~a\n" (message-content msg)))
+
+
+  ;1. delete-data! data-key where message handler has input-data set to 
+  ;data-key deletes handler from hash 
+  (let* ([num-threads 8]
          [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
 
-    (let 
-      ([inp-vals (list 'test 'test2 #f "teststring")]
-       [ch (channel)]
-       [inp-vals2 (list 'test3 'test4 #t "teststring2")])
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              #f
+                              (list (list '#:data test-data-key #f))
+                              #f)
 
-      (define-coroutine 
-        (test-task-co2 ch vals)
-        (for ([val vals])
-             (let ()
-               (printf "Putting ~a in channel\n" val)
-               (ch-put ch val))))
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
 
-      (go env (test-task-co2 ch inp-vals))
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
 
-      (sleep 0.1)
-      (wait-len env)
-      (for ([i num-threads])
-           (printf "\n--- tests for thread ~a ---\n" i)
-           (test-true? "Check if dp thread is not dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
-           (test-true? "Check if dp thread is not running" (not (thread-running? (get-dp-thread env 1))) pr wait)
-           (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait))
+    (close-dp env))
+
+  ;2. delete-data! data-key where message handlers have input-data set to 
+  ;data-key deletes handlers from hash 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (for ([i 4])
+           (define-message-handler env 
+                                   test-handler 
+                                   test-message-type
+                                   #f
+                                   (list (list '#:data test-data-key #f))
+                                   #f))
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait))
+    (close-dp env))
+
+  ;3. delete-data! data-key where message handler does not have input-data to
+  ;data-key does *not* delete handler from hash 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              #f
+                              (list (list '#:data (+ test-data-key 1) #f))
+                              #f)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait))
+    (close-dp env))
+
+  ;4. delete-data! data-key where message handlers do not have input-data set 
+  ;to data-key does *not* delete handlers from hash 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (for ([i 4])
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              #f
+                              (list (list '#:data (+ test-data-key 1) #f))
+                              #f))
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait))
+    (close-dp env))
+
+  ;5. delete-data! data-key where 1 handler has input-data set to data-key 
+  ;and another handler does not, only deletes the first handler 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              #f
+                              (list (list '#:data test-data-key #f))
+                              #f)
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              #f
+                              (list (list '#:data (+ test-data-key 1) #f))
+                              #f)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait))
+    (close-dp env)))
+;;**************************************
 
 
-      (printf "\n")
-      (for ([i (length inp-vals)])
-           (let ([val (list-ref inp-vals i)]
-                 [ret (ch-get ch inp-vals)])
-             (test-equal? "Did expected val get placed in channel" ret val pr wait)))
+;;**************************************
+;;TEST mange message handlers 5: delete message handlers with deleted key set to return-destinations
+;;-------------------------------------- 
+(define (test-message-handlers-5)
+  (test-section "manage message handlers 5: delete message handlers with deleted key set to return-destinations")
 
 
-      (go env (test-task-co2 ch inp-vals2))
-      (sleep 0.1)
+  ;setup test data
+  (define test-class%
+    (class object% 
+           (super-new)))
 
-      (for ([i num-threads])
-           (printf "\n--- tests for thread ~a ---\n" i)
-           (test-true? "Check if dp thread is dead" (not (thread-dead? (get-dp-thread env 1))) pr wait)
-           (test-true? "Check if dp thread is actively running" (not (thread-running? (get-dp-thread env 1))) pr wait)
-           (test-equal? "Verify task queue is empty" (queue-length (get-dp-queue env 0)) 0 pr wait))
+  (define test-object (make-object test-class%))
 
-      (printf "\n")
-      (for ([i (length inp-vals2)])
-           (let ([val (list-ref inp-vals2 i)]
-                 [ret (ch-get ch #f)])
-             (test-equal? "Did expected val get placed in channel" ret val pr wait))))
+  (define test-message-type 'test-message-type)
+
+  (define-coroutine 
+    (test-handler msg)
+    (print "test handler arg: ~a\n" (message-content msg)))
+
+
+  ;1. delete data-key where message handler has return-destinations set to 
+  ;data-key deletes handler from hash 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              #f
+                              #f
+                              (list (list '#:data test-data-key #f)))
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait))
+    (close-dp env))
+
+  ;2. delete data-key where message handlers have return-destinations set to 
+  ;data-key deletes handlers from hash 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (for ([i 4])
+           (define-message-handler env 
+                                   test-handler 
+                                   test-message-type
+                                   #f
+                                   #f
+                                   (list (list '#:data test-data-key #f))))
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait))
+    (close-dp env))
+
+  ;3. delete data-key where message handler does not have return-destinations 
+  ;to data-key does *not* delete handler from hash 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              #f
+                              #f
+                              (list (list '#:data (+ test-data-key 1) #f)))
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait))
+    (close-dp env))
+
+  ;4. delete data-key where message handler does not have return-destinations 
+  ;to data-key does *not* delete handler from hash 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (for ([i 4])
+           (define-message-handler env 
+                                   test-handler 
+                                   test-message-type
+                                   #f
+                                   #f
+                                   (list (list '#:data (+ test-data-key 1) #f))))
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait))
+    (close-dp env))
+
+  ;5. delete data-key where 1 handler has return-destinations set to data-key 
+  ;and another handler does not, only deletes the first handler 
+  (let* ([num-threads 8]
+         [env (datapool num-threads)])
+    (let ([test-data-key (register-data! env test-object)])
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        0
+        pr
+        wait)
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              #f
+                              #f
+                              (list (list '#:data test-data-key #f)))
+
+      (define-message-handler env 
+                              test-handler 
+                              test-message-type
+                              #f
+                              #f
+                              (list (list '#:data (+ test-data-key 1) #f)))
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait)
+
+      (test-true? "delete-data!" (delete-data! env test-data-key) pr wait)
+
+      (test-equal? 
+        "message handler size" 
+        (hash-count (get-dp-message-handler-hash env))
+        1
+        pr
+        wait))
     (close-dp env)))
 ;;**************************************
 
@@ -1054,7 +1773,7 @@
     ;collate results in a channel
     (define-coroutine
       (collate-coroutine ch val)
-        (ch-put ch val))
+      (ch-put ch val))
 
     (let ([start-time (current-inexact-milliseconds)])
       (for ([i x]) 
@@ -1101,38 +1820,12 @@
         pr 
         wait)
       (printf "Val stored in shared data object: ~a\n" (get-data-field env obj-key 'val)))
-    
+
     ;------------------------------------------------------------------------ 
     ;handle results in the data hash using message handler
 
     (close-dp env)))
 ;;--------------------------------------
-
-
-;;**************************************
-;;TEST message handler stress test
-;;-------------------------------------- 
-(define (test-message-handler-stress)
-  (test-section "message handler stress test")
-  (let* ([num-threads 8]
-         [env (datapool num-threads)])
-    (close-dp env)))
-;;--------------------------------------
-
-
-;;;---------------------------------------------------------------------------- 
-;;; Feature Tests
-;;;---------------------------------------------------------------------------- 
-;TODO figure out how to get argv & argc 
-;(define dp1 (datapool 4 '(main argv argc)))
-;(let ([ch (get-datapool-input-channel dp1)]) 
-;(ch-get ch)) 
-(define (test-feature)
-  (test-section "Feature Tests")
-  (let* ([num-threads 8]
-         [env (datapool num-threads)])
-    (close-dp env)))
-;;;---------------------------------------------------------------------------- 
 
 ;; PUBLIC API
 (define 
@@ -1146,15 +1839,16 @@
   (test-datapool-getters-setters)
   (test-task-queues)
   (test-data-hash)
-  (test-message-handlers)
-  (test-message-handlers-2)
   (test-datapool-threads)
   (test-go)
+  (test-message-handlers)
+  (test-message-handlers-2)
+  (test-message-handlers-3)
+  (test-message-handlers-4)
+  (test-message-handlers-5)
   (test-go-stress)
   (test-go-stress-2)
   (test-go-stress-3)
-  (test-message-handler-stress)
-  (test-feature)
 
   (print-test-report))
 
