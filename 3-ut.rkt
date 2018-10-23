@@ -542,7 +542,8 @@
   (test-section "datapool thread internal functions")
   (let* ([num-threads 2]
          [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [env (datapool cenv)]) 
+    (sleep 0.1)
     (define-coroutine (test-task-co)
                       3)
     (define test-task (test-task-co))
@@ -1859,6 +1860,59 @@
          [env (datapool cenv)]
          [env2 (datapool cenv)]
          [ch (channel)])
+
+    (define test-val 17)
+    (define test-val-2 2)
+    (define test-val-3 24)
+    (define test-val-4 55)
+
+    (define-coroutine
+      (output-to-other-datapool val)
+      val)
+
+    (define test-env2-class%
+      (class object% 
+             (super-new)
+             (field [test-field test-val-2])))
+
+    (define test-env2-object (make-object test-env2-class%))
+
+    (let ([test-key (register-data! env2 test-env2-object)])
+      (go env 
+          (output-to-other-datapool test-val) 
+          (list (list '#:datapool env2 test-key 'test-field)))
+
+      (wait-len env)
+
+      (test-equal? "successfully set env2 field from env" 
+                   (get-data-field env2 test-key 'test-field) 
+                   test-val
+                   pr 
+                   wait)
+      (go env 
+          (output-to-other-datapool test-val-3) 
+          (list (list '#:datapool env2 test-key 'test-field)))
+
+      (wait-len env)
+
+      (test-equal? "successfully set env2 field from env" 
+                   (get-data-field env2 test-key 'test-field) 
+                   test-val-3
+                   pr 
+                   wait)
+
+      (go env 
+          (output-to-other-datapool test-val-4) 
+          (list (list '#:datapool env2 test-key #f)))
+
+      (wait-len env)
+
+      (test-equal? "successfully set env2 data from env" 
+                   (get-data env2 test-key) 
+                   test-val-4
+                   pr 
+                   wait))
+
     (close-dp env)
     (close-dp env2)))
 

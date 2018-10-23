@@ -998,13 +998,13 @@
 ;; Redefine data at key
 (define (set-data! env key value)
   (if (equal? (get-data env key) 'not-found)
+      'not-found
       (let ()
         (semaphore-wait (get-data-sem env))
         (hash-data! env key value)
         (semaphore-post (get-data-sem env))
         (send-message env (message (data-changed-type key) value))
-        key)
-      'not-found))
+        key)))
 
 
 ;Handle (go) return values by sending them to the specified locations in the 
@@ -1052,11 +1052,19 @@
 
   ;Handle any alternative datapool returns
   (define (handle-return-datapool return-env key field val)
-    (if field
-        ;set object field at data key
-        (set-data-field! return-env key field val)
-        ;replace data at key
-        (set-data! return-env key val)))
+    (printf "handle-return-datapool 1 key: ~a; field: ~a\n" key field)
+    (if field 
+        (let ()
+          (printf "handle-return-datapool 2\n")
+          ;set object field at data key
+          (set-data-field! return-env key field val)
+        )
+        (let ()
+          (printf "handle-return-datapool 3 val: ~a\n" val)
+          ;replace data at key
+          (define set-data-ret (set-data! return-env key val))
+          (printf "handle-return-datapool 4 set-data-ret: ~a; get-data: ~a\n" set-data-ret (get-data return-env key))
+        )))
 
   ;Handle any channel returns
   (define (handle-return-channel ch val)
