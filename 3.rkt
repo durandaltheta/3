@@ -22,8 +22,10 @@
 ;;; 9. Convert to C library (requires custom code for several components not supported by out of the box C)
 
 (provide 
-  ;;;DATAPOOL
+  ;;;DATAPOOL 
+  computepool ;start a computation pool of worker threads for use in one or more datapools
   datapool ;start a datapool
+  get-computepool ;return computepool specified in datapool
   get-num-dp-threads 
   close-dp ;kill all threads and processes in the datapool 
 
@@ -353,19 +355,35 @@
 
 ;;;----------------------------------------------------------------------------
 ;;; DATAPOOL
-;;;----------------------------------------------------------------------------
-;;create datapool data 
-(define (datapool num-threads) 
-  (let* ([key-src 0]
-         [ret
-           (box 
-             (vector  
+;;;---------------------------------------------------------------------------- 
+;;create computepool environment of worker threads
+(define (computepool num-threads)
+  (let ([ret (vector 
                (vector ;datapool info vector 
                  num-threads
                  (make-queue) ;queue of threads waiting to invoke (go)
                  (make-semaphore 1)) ;sem for sleeping thread queue
                (make-vector ;threads, queues, and semaphores
-                 num-threads)
+                 num-threads))])
+    (for ([i num-threads])
+         (let ()
+           (vector-set! 
+             (vector-ref ret 1) 
+             i
+             (vector 
+               (thread (thunk (dp-thread-start ret))) ;threads
+               (make-queue) ;thread task queues
+               (make-semaphore 1))))) ;thread task queue semaphores 
+    ret))
+
+
+;;create datapool environment of hashed data and message callbacks
+(define (datapool computepool) 
+  (let* ([key-src 0]
+         [ret
+           (box 
+             (vector  
+               computepool
                (vector ;message handler vector
                  (make-hash) ;hash table of lists of message handlers
                  (make-semaphore 1)) ;message handlers semaphore
@@ -374,39 +392,42 @@
                  (make-semaphore 1) ;data hash semaphore
                  key-src ;data-obj-key-src
                  (make-queue))))]) ;data-obj-free-key-q 
-    (for ([i num-threads])
-         (let ()
-           (vector-set! 
-             (vector-ref (unbox ret) 1) 
-             i
-             (vector 
-               (thread (thunk (dp-thread-start ret))) ;threads
-               (make-queue) ;thread task queues
-               (make-semaphore 1))))) ;thread task queue semaphores 
     ret)) ;return a 'by reference' symbol
+
 
 ;; Global for maximum datapool task queue size
 (define *MAX-DP-QUEUE-SIZE* 255)
+
+
+(define (get-num-dp-threads-intern computepool) 
+  (vector-ref (vector-ref computepool 0) 0))
 
 
 ;; Return the datapool's environment data
 (define (unbox-dp-env env)
   (unbox env))
 
+
+;; PUBLIC API
+;; Return the internally specified computepool of worker threads
+(define (get-computepool env)
+  (vector-ref (unbox-dp-env env) 0))
+
+
 ;; PUBLIC API
 ;; Return number of threads in the datapool
 (define (get-num-dp-threads env) 
-  (vector-ref (vector-ref (unbox-dp-env env) 0) 0))
+  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 0) 0) 0))
 
 
 ;; Return queue of sleeping threads waiting to invoke (go)
-(define (get-waiting-threads-queue env) 
-  (vector-ref (vector-ref (unbox-dp-env env) 0) 1))
+(define (get-waiting-threads-queue computepool) 
+  (vector-ref (vector-ref computepool 0) 1))
 
 
 ;; Return queue of sleeping threads waiting to invoke (go)
-(define (get-waiting-threads-queue-sem env) 
-  (vector-ref (vector-ref (unbox-dp-env env) 0) 2))
+(define (get-waiting-threads-queue-sem computepool) 
+  (vector-ref (vector-ref computepool 0) 2))
 
 
 ;; PUBLIC API
@@ -414,7 +435,15 @@
 (define (close-dp env)
   ;kill threads
   (for ([i (get-num-dp-threads env)])
-       (kill-thread (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) i) 0))))
+       (kill-thread (vector-ref 
+                      (vector-ref 
+                        (vector-ref 
+                          (vector-ref 
+                            (unbox-dp-env env) 
+                            0) 
+                          1) 
+                        i) 
+                      0))))
 
 
 
@@ -423,26 +452,44 @@
 ;;;----------------------------------------------------------------------------
 ;;;threads
 ;; Get a thread pid at provided index
-(define (get-dp-thread env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) idx) 0))
+(define (get-dp-thread computepool idx)
+  (vector-ref 
+    (vector-ref 
+      (vector-ref 
+        computepool
+        1) 
+      idx) 
+    0))
 
 
 ;; Get a thread task queue at provided index
-(define (get-dp-queue env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) idx) 1))
+(define (get-dp-queue computepool idx)
+  (vector-ref 
+    (vector-ref 
+      (vector-ref 
+        computepool
+        1) 
+      idx) 
+    1))
 
 
 ;; Get a thread task queue semaphore at provided index
-(define (get-dp-queue-sem env idx)
-  (vector-ref (vector-ref (vector-ref (unbox-dp-env env) 1) idx) 2))
+(define (get-dp-queue-sem computepool idx)
+  (vector-ref 
+    (vector-ref 
+      (vector-ref 
+        computepool
+        1) 
+      idx) 
+    2))
 
 
 ;; Get the index of the fullest thread task queue
-(define (get-max-dp-q-idx env)
-  (define longest (cons (queue-length (get-dp-queue env 0)) 0))
-  (when (> (get-num-dp-threads env) 1)
-    (for ([i (in-range 1 (get-num-dp-threads env))])
-         (let ([cur-q-len (queue-length (get-dp-queue env i))])
+(define (get-max-dp-q-idx computepool)
+  (define longest (cons (queue-length (get-dp-queue computepool 0)) 0))
+  (when (> (get-num-dp-threads-intern computepool) 1)
+    (for ([i (in-range 1 (get-num-dp-threads-intern computepool))])
+         (let ([cur-q-len (queue-length (get-dp-queue computepool i))])
            (when (< (car longest) cur-q-len)
              (begin
                (set! longest (cons cur-q-len i)))))))
@@ -450,11 +497,11 @@
 
 
 ;; Get the index of the emptiest thread task queue
-(define (get-min-dp-q-idx env)
-  (define shortest (cons (queue-length (get-dp-queue env 0)) 0))
-  (when (> (get-num-dp-threads env) 1)
-    (for ([i (in-range 1 (get-num-dp-threads env))])
-         (let ([cur-q-len (queue-length (get-dp-queue env i))])
+(define (get-min-dp-q-idx computepool)
+  (define shortest (cons (queue-length (get-dp-queue computepool 0)) 0))
+  (when (> (get-num-dp-threads-intern computepool) 1)
+    (for ([i (in-range 1 (get-num-dp-threads-intern computepool))])
+         (let ([cur-q-len (queue-length (get-dp-queue computepool i))])
            (when (> (car shortest) cur-q-len)
              (begin
                (set! shortest (cons cur-q-len i)))))))
@@ -478,7 +525,9 @@
 ;; '#:channel channel
 ;; '#:data key field ;if field is #f then the data at the provided key will be 
 ;;                   ;overwritten with the return value rather than modifying an 
-;;                   ;object's field
+;;                   ;object's field 
+;; '#:datapool datapool key field ;same as '#:data but for the specified 
+;;                                ;datapool data
 ;;
 ;; The actual values provided for each message/data/data-field/channel handler 
 ;; are the list of return values from the (go) function handled in the order 
@@ -497,30 +546,32 @@
   (when (not (equal? (suspended-coroutine 'coroutine?) 'coroutine))
     (raise-inv-arg "suspended-coroutine not a coroutine" suspended-coroutine))
 
-  (let ([q-idx (get-min-dp-q-idx env)])
-    ;put current thread to sleep if not a datapool worker thread and trying to 
-    ;add too many (go) invocations, wait till queue empties a bit so as to not 
-    ;continuously increase the size of the queues (can massively slow down 
-    ;program execution)
-    (let ([self (current-thread)]
-          [num-threads (get-num-dp-threads env)]
-          [datapool-worker #f])
-      (for ([i num-threads])
-           (when (equal? self (get-dp-thread env i))
-             (set! datapool-worker #t)))
+  (let ([computepool (get-computepool env)])
+    (let ([q-idx (get-min-dp-q-idx computepool)])
+      ;put current thread to sleep if not a datapool worker thread and trying to 
+      ;add too many (go) invocations, wait till queue empties a bit so as to not 
+      ;continuously increase the size of the queues (can massively slow down 
+      ;program execution)
+      (let ([self (current-thread)]
+            [num-threads (get-num-dp-threads env)]
+            [datapool-worker #f])
+        (for ([i num-threads])
+             (when (equal? self (get-dp-thread computepool i))
+               (set! datapool-worker #t)))
 
-      (when (not datapool-worker)
-        (when (>= (queue-length (get-dp-queue env q-idx)) *MAX-DP-QUEUE-SIZE*)
-          (semaphore-wait (get-waiting-threads-queue-sem env))
-          (enqueue! (get-waiting-threads-queue env) self)
-          (semaphore-post (get-waiting-threads-queue-sem env))
-          (thread-suspend self))))
-    (semaphore-wait (get-dp-queue-sem env q-idx))
-    (enqueue! (get-dp-queue env q-idx) (list suspended-coroutine 
-                                             return-destinations))
-    (semaphore-post (get-dp-queue-sem env q-idx))
-    (thread-resume (get-dp-thread env q-idx))
-    #t))
+        (when (not datapool-worker)
+          (when (>= (queue-length (get-dp-queue computepool q-idx)) *MAX-DP-QUEUE-SIZE*)
+            (semaphore-wait (get-waiting-threads-queue-sem computepool))
+            (enqueue! (get-waiting-threads-queue computepool) self)
+            (semaphore-post (get-waiting-threads-queue-sem computepool))
+            (thread-suspend self))))
+      (semaphore-wait (get-dp-queue-sem computepool q-idx))
+      (enqueue! (get-dp-queue computepool q-idx) (list env
+                                                       suspended-coroutine 
+                                                       return-destinations))
+      (semaphore-post (get-dp-queue-sem computepool q-idx))
+      (thread-resume (get-dp-thread computepool q-idx))
+      #t)))
 
 
 
@@ -529,27 +580,27 @@
 ;;;----------------------------------------------------------------------------
 ;; Get the hash of data objects
 (define (get-data-hash env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 0))
+  (vector-ref (vector-ref (unbox-dp-env env) 2) 0))
 
 
 ;; Get the data objects semaphore
 (define (get-data-sem env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 1))  
+  (vector-ref (vector-ref (unbox-dp-env env) 2) 1))  
 
 
 ;; Get the data object current new key source integer
 (define (get-data-key-src env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 2)) 
+  (vector-ref (vector-ref (unbox-dp-env env) 2) 2)) 
 
 
 ;; Set the data object current new key source integer
 (define (set-data-key-src env val)
-  (vector-set! (vector-ref (unbox-dp-env env) 3) 2 val)) 
+  (vector-set! (vector-ref (unbox-dp-env env) 2) 2 val)) 
 
 
 ;; Get the queue of freed data keys
 (define (get-data-free-key-q env)
-  (vector-ref (vector-ref (unbox-dp-env env) 3) 3))
+  (vector-ref (vector-ref (unbox-dp-env env) 2) 3))
 
 
 ;; Add a recycled data object key to the container queue
@@ -668,12 +719,12 @@
 
 ;; Get the hash of message callback handlers
 (define (get-dp-message-handler-hash env)
-  (vector-ref (vector-ref (unbox-dp-env env) 2) 0))
+  (vector-ref (vector-ref (unbox-dp-env env) 1) 0))
 
 
 ;; Get the message callback handlers semaphore
 (define (get-dp-message-handler-hash-sem env)
-  (vector-ref (vector-ref (unbox-dp-env env) 2) 1))
+  (vector-ref (vector-ref (unbox-dp-env env) 1) 1))
 
 
 ;; Get message callback handlers for msg-type and src-key
@@ -999,6 +1050,14 @@
         ;replace data at key
         (set-data! env key val)))
 
+  ;Handle any alternative datapool returns
+  (define (handle-return-datapool return-env key field val)
+    (if field
+        ;set object field at data key
+        (set-data-field! return-env key field val)
+        ;replace data at key
+        (set-data! return-env key val)))
+
   ;Handle any channel returns
   (define (handle-return-channel ch val)
     (ch-put ch val))
@@ -1021,6 +1080,13 @@
                  (let ([key (cadr dest)]
                        [field (caddr dest)])
                    (handle-return-data key field val))
+                 (error "Incorrect number of arguments in '#:data (go) handler" (length dest)))]
+            ['#:datapool 
+             (if (equal? (length dest) 4)
+                 (let ([return-env (cadr dest)]
+                       [key (caddr dest)]
+                       [field (cadddr dest)])
+                   (handle-return-datapool return-env key field val))
                  (error "Incorrect number of arguments in '#:data (go) handler" (length dest)))]
             ['#:channel 
              (if (equal? (length dest) 2)
@@ -1055,28 +1121,28 @@
 
 ;; Return thread's queue index if not empty, otherwise gets the index of the 
 ;; fullest queue.
-(define (get-task-q-idx env thread-idx)
-  (let ([thread-queue (get-dp-queue env thread-idx)])
+(define (get-task-q-idx computepool thread-idx)
+  (let ([thread-queue (get-dp-queue computepool thread-idx)])
     (if (equal? (queue-length thread-queue) 0)
-        (let ([highest-idx (get-max-dp-q-idx env)])
-          (if (equal? (queue-length (get-dp-queue env highest-idx)) 0) 
+        (let ([highest-idx (get-max-dp-q-idx computepool)])
+          (if (equal? (queue-length (get-dp-queue computepool highest-idx)) 0) 
               #f
               highest-idx))
         thread-idx)))
 
 
 ;; Return a task from a thread queue to execute
-(define (get-task env thread-idx)
-  (let ([q-idx (get-task-q-idx env thread-idx)])
+(define (get-task computepool thread-idx)
+  (let ([q-idx (get-task-q-idx computepool thread-idx)])
     (if (equal? q-idx #f)
         #f 
         (let ()
-          (semaphore-wait (get-dp-queue-sem env q-idx))
+          (semaphore-wait (get-dp-queue-sem computepool q-idx))
           (let ([ret 
-                  (if (queue-empty? (get-dp-queue env q-idx))
+                  (if (queue-empty? (get-dp-queue computepool q-idx))
                       #f
-                      (dequeue! (get-dp-queue env q-idx)))])
-            (semaphore-post (get-dp-queue-sem env q-idx))
+                      (dequeue! (get-dp-queue computepool q-idx)))])
+            (semaphore-post (get-dp-queue-sem computepool q-idx))
             ret)))))
 
 
@@ -1084,22 +1150,23 @@
 ;; evaluations in coroutines. If provided task is *not* a coroutine and/or 
 ;; that coroutine does not (yield) intelligently this may have no effect.
 ;; Returns: #t if task completed, #f if task not yet completed
-(define (dp-thread-exec-task env thread-idx task)
-  (let ([co (car task)]
-        [return-dests (cadr task)])
+(define (dp-thread-exec-task computepool thread-idx task)
+  (let ([co-env (car task)]
+        [co (cadr task)]
+        [return-dests (caddr task)])
     (let ([return-vals (co)])
       (if (co 'dead?) ;check if coroutine is dead 
           (let () ;task completed 
             (when (and return-dests return-vals)
-              (handle-go-returns env return-dests return-vals))
+              (handle-go-returns co-env return-dests return-vals))
             #t)
           (let ()
-            (go env co return-dests) ;place task at the back of a queue
+            (go co-env co return-dests) ;place task at the back of a queue
             #f)))))
 
 
 ;; Eternal thread tail recursion of executing tasks
-(define (dp-thread env thread-idx) 
+(define (dp-thread computepool thread-idx) 
   (with-handlers 
     ([exn:fail? 
        (lambda (e)
@@ -1107,37 +1174,38 @@
            (current-error-port)
            "dp-thread got error, current task thrown out: ~a\n"
            e)
-         (dp-thread env thread-idx))])
-    (let ([task (get-task env thread-idx)])
+         (dp-thread computepool thread-idx))])
+    (let ([task (get-task computepool thread-idx)])
       (if (or (not task) (equal? (car task) #f))
           (thread-suspend (current-thread))
           (let ()
             (dp-thread-exec-task ;execute the task we get
-              env 
+              computepool 
               thread-idx 
               task)))))
 
   ;; Attempt to restart threads waiting to enqueue a (go) task
-  (when (and (> (queue-length (get-waiting-threads-queue env)) 0)
-             (< (queue-length (get-dp-queue env (get-min-dp-q-idx env))) *MAX-DP-QUEUE-SIZE*))
-    (semaphore-wait (get-waiting-threads-queue-sem env))
-    (let ([thread (dequeue! (get-waiting-threads-queue env))])
+  (when (and (> (queue-length (get-waiting-threads-queue computepool)) 0)
+             (< (queue-length (get-dp-queue computepool (get-min-dp-q-idx computepool))) 
+                *MAX-DP-QUEUE-SIZE*))
+    (semaphore-wait (get-waiting-threads-queue-sem computepool))
+    (let ([thread (dequeue! (get-waiting-threads-queue computepool))])
       (when (not (thread-dead? thread)) ;throw out any dead threads
         (if (not (thread-running? thread))
             (thread-resume thread) ;resume thread waiting to invoke (go)
-            (enqueue! (get-waiting-threads-queue env))))) ;thread not ready to resume
-    (semaphore-post (get-waiting-threads-queue-sem env)))
-  (dp-thread env thread-idx))
+            (enqueue! (get-waiting-threads-queue computepool))))) ;thread not ready to resume
+    (semaphore-post (get-waiting-threads-queue-sem computepool)))
+  (dp-thread computepool thread-idx))
 
 
 ;; Thread startup coroutine
-(define (dp-thread-start env)
+(define (dp-thread-start computepool)
   (let ([id (current-thread)])
     (define thread-num 0)
-    (for ([i (get-num-dp-threads env)])
-         (when (equal? (get-dp-thread env i) id) 
+    (for ([i (get-num-dp-threads-intern computepool)])
+         (when (equal? (get-dp-thread computepool i) id) 
            (set! thread-num i)))
-    (dp-thread env thread-num)))
+    (dp-thread computepool thread-num)))
 
 
 
@@ -1148,17 +1216,18 @@
 (define (print-queue-lens env)
   (printf "\n")
   (for ([i (get-num-dp-threads env)])
-       (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue env i))))
+       (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue (get-computepool env) i))))
   (printf "\n\n"))
 
 ;; Wait until total task queue lengths == 0
 (define (wait-len env)
+  (define cenv (get-computepool env))
   (define idxs (list))
   (for ([i (get-num-dp-threads env)])
        (set! idxs (append idxs (list i))))
   (define check-in-time (current-inexact-milliseconds))
   (define (inner-loop env idxs)
-    (let ([lens (map (lambda (idx) (queue-length (get-dp-queue env idx))) idxs)]
+    (let ([lens (map (lambda (idx) (queue-length (get-dp-queue cenv idx))) idxs)]
           [done #t])
       (for-each 
         (lambda (len) 
