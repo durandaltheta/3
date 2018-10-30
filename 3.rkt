@@ -1,8 +1,19 @@
-#lang typed/racket
+#lang typed/racket 
+
 (require typed/racket/base
          typed/racket/class
-         typed/racket/async-channel
-         data/queue)
+         typed/racket/async-channel)
+
+;; Currently no type for Queue?
+(define-type Queue Any) 
+
+(require/typed data/queue 
+               [make-queue (-> Queue)]
+               [enqueue! (-> Queue Any Void)]
+               [dequeue! (-> Queue Any)]
+               [queue-empty? (-> Queue Boolean)]
+               [queue-length (-> Queue Integer)])
+
 
 ;;;;Data wants to be structured and stateful 
 ;;;;Functions want to be functional and stateless
@@ -22,8 +33,8 @@
 
 (provide 
   ;;;DATAPOOL 
-  computepool ;start a computation pool of worker threads for use in one or more datapools
-  datapool ;start a datapool
+  make-computepool ;start a computation pool of worker threads for use in one or more datapools
+  make-datapool ;create a datapool of hashed data and hashed message callbacks
   get-computepool ;return computepool specified in datapool
   get-num-dp-threads 
   close-dp ;kill all threads and processes in the datapool 
@@ -50,7 +61,7 @@
   message-type ;return a message's type
   message-content ;return a message's content payload 
   message-source ;return a message's source key
-  define-message-handler ;register a coroutine procedure that is called when a message with corresponding message-type and source-key 
+  register-message-handler ;register a coroutine procedure that is called when a message with corresponding message-type and source-key 
   data-changed-type ;get the message type used for a specific data being changed in the data hash, used for setting up message handlers when data changes
   send-message ;send a message object to registered message handlers
 
@@ -304,11 +315,13 @@
 
 ;;;----------------------------------------------------------------------------
 ;;; COMPUTATION - coroutines
-;;;----------------------------------------------------------------------------  
-;; Coroutine definition 
-(: make-generator (-> Procedure Procedure))
-(define (make-generator [procedure : Procedure])
-  (: last-return Any)
+;;;----------------------------------------------------------------------------  ;; Coroutine definition
+(define-type Coroutine (-> Any * Any)) 
+(define-type Coroutine-Generator (-> Any * Coroutine))
+
+(: make-generator (-> (-> Any * Any) Coroutine))
+(define (make-generator [procedure : (-> Any * Any)])
+
   (define last-return values)
 
   (: last-value Any)
@@ -317,41 +330,46 @@
   (: status Symbol)
   (define status 'suspended)
 
-  (: last-continuation Procedure)
-  (define (last-continuation [_ : Any]) 
+  (: last-continuation (-> Any Any))
+  (define (last-continuation _) 
     (let ([result (procedure yield)]) 
       (last-return result)))
 
   (: yield (-> Any Any))
   (define (yield [value : Any])
-    (call/cc (lambda ([continuation : Procedure])
+    (call/cc (lambda ([continuation : (-> Any Any)])
                (set! last-continuation continuation)
                (set! last-value value)
                (set! status 'suspended)
-               (last-return value))))
+               (last-return value)))) 
 
-  (lambda args
-    (call/cc (lambda ([return : Any])
-               (set! last-return return)
-               (cond ((null? args) 
-                      (let ()
-                        (set! status 'dead)
-                        (last-continuation last-value)))
-                     ((eq? (car args) 'coroutine?) 'coroutine)
-                     ((eq? (car args) 'dead?) (eq? status 'dead))
-                     ((eq? (car args) 'alive?) (not (eq? status 'dead)))
-                     ((eq? (car args) 'kill!) (set! status 'dead))
-                     (#t (apply last-continuation args)))))))
+  (: coroutine Coroutine)
+  (define 
+    coroutine
+    (lambda args
+      (call/cc (lambda (return)
+                 ;(set! last-return return)
+                 (cond ((null? args) (let ()
+                                       (set! status 'dead)
+                                       (last-continuation last-value)))
+                       ((eq? (car args) 'coroutine?) 'coroutine)
+                       ((eq? (car args) 'dead?) (eq? status 'dead))
+                       ((eq? (car args) 'suspended?) (not (eq? status 'dead)))
+                       ((eq? (car args) 'kill!) (set! status 'dead)))))))
+                       ;(#t (apply last-continuation args)))))))
+  coroutine)
 
 
 ;;Define a function that will return a suspended coroutine created from given args and body forms
 (define-syntax (define-coroutine stx)
   (syntax-case stx ()
                ((_ (name . args) . body )
-                #`(define (name . args)
-                    (make-generator
-                      (lambda (#,(datum->syntax stx 'yield))
-                        . body))))))
+                #`(begin 
+                    (: name Coroutine-Generator)
+                    (define (name . args)
+                      (make-generator
+                        (lambda (#,(datum->syntax stx 'yield))
+                          . body)))))))
 
 
 
@@ -359,22 +377,24 @@
 ;;; COMMUNICATION - channels
 ;;;---------------------------------------------------------------------------- 
 ;;create an async channel, no size limit by default 
-(define-type Async-Channel-Size (U False Exact-Nonnegative-Integer))
-(: channel (-> Async-Channel-Size Async-ChannelTop))
-(define (channel [size : Async-Channel-Size #f]) (make-async-channel size))
+(define-type Async-Channel-Size-Union (U Exact-Positive-Integer False))
+
+(: channel (-> Async-Channel-Size-Union (Async-Channelof Any)))
+(define (channel [size : Async-Channel-Size-Union #f]) 
+  (make-async-channel size))
 
 
 ;;channel get, blocks by default 
-(: ch-get (-> Async-ChannelTop Boolean Any))
-(define (ch-get [ch : Async-ChannelTop] [block : Boolean #t])
+(: ch-get (-> (Async-Channelof Any) Boolean Any))
+(define (ch-get [ch : (Async-Channelof Any)] [block : Boolean #t])
   (if block
       (async-channel-get ch)
       (async-channel-try-get ch)))
 
 
 ;;channel put 
-(: ch-put (-> Async-ChannelTop Any Void))
-(define (ch-put [ch : Async-ChannelTop] [item : Any])
+(: ch-put (-> (Async-Channelof Any) Any Void))
+(define (ch-put [ch : (Async-Channelof Any)] [item : Any])
   (async-channel-put ch item))
 
 
@@ -382,8 +402,6 @@
 ;;;----------------------------------------------------------------------------
 ;;; DATAPOOL
 ;;;---------------------------------------------------------------------------- 
-;; Currently no type for Queue?
-(define-type Queue Any) 
 
 ;;create computepool environment of worker threads 
 (define-type Computepool (Vector (Vector Exact-Nonnegative-Integer 
@@ -392,8 +410,8 @@
                                  (Vector Thread
                                          Queue 
                                          Semaphore))) 
-(: computepool (-> Exact-Nonnegative-Integer Computepool))
-(define (computepool [num-threads : Exact-Nonnegative-Integer])
+(: make-computepool (-> Exact-Nonnegative-Integer Computepool))
+(define (make-computepool [num-threads : Exact-Nonnegative-Integer])
   (let ([ret : Computepool
              (vector 
                (vector ;datapool info vector 
@@ -412,7 +430,6 @@
                (make-queue) ;thread task queues
                (make-semaphore 1))))) ;thread task queue semaphores 
     ret))
-
 
 ;; Data type def
 (define-type Data-Key (U Exact-Nonnegative-Integer False))
@@ -433,8 +450,10 @@
 (define-type Input-List (U False (Listof (List Data-Key Data-Field))))
 (define-type Input-Data (Listof Any))
 
-;; Callback handlers type def
-(define-type Message-Callback-Handlers (Listof (List Procedure Input-List Return-List)))
+;; Callback handlers type def 
+(define-type Message-Callback-Handler (List Coroutine-Generator Input-List Return-List))
+(define-type Message-Callback-Handlers (Listof Message-Callback-Handler))
+(define-type Message-Callback-Handlers-Union (U False Message-Callback-Handlers))
 
 ;; Message Callback Hash type def 
 (define-type Message-Callback-Hash 
@@ -455,8 +474,8 @@
                                              Queue))))
 
 ;;create datapool environment of hashed data and message callbacks 
-(: datapool (-> Computepool Datapool))
-(define (datapool [computepool : Computepool]) 
+(: make-datapool (-> Computepool Datapool))
+(define (make-datapool [computepool : Computepool]) 
   (let* ([key-src : Data-Key 0]
          [ret : Datapool
               (box 
@@ -626,9 +645,9 @@
 ;; (list (list '#:data key1 field1) 
 ;;       (list '#:data key2 field2) 
 ;;       (list '#:message type source))
-(: go (-> Datapool Procedure Return-List Boolean))
+(: go (-> Datapool Coroutine Return-List Boolean))
 (define (go [env : Datapool] 
-            [suspended-coroutine : Procedure] 
+            [suspended-coroutine : Coroutine] 
             [return-destinations : Return-List #f])
   (when (not (procedure? suspended-coroutine))
     (raise-inv-arg "suspended-coroutine not a procedure" suspended-coroutine))
@@ -739,7 +758,7 @@
 ;; get the message type used for when a specific data key is changed in the 
 ;; data hash, used for setting up message handlers when data changes:
 ;;
-;; (define-message-handler 
+;; (register-message-handler 
 ;;   example-env 
 ;;   example-handler 
 ;;   (data-changed-type example-key 'example-field)                  ;<== when we get this message 
@@ -836,11 +855,11 @@
 (define (get-dp-message-handler-hash-sem [env : Datapool])
   (vector-ref (vector-ref (unbox env) 1) 1))
 
-;; Get message callback handlers for msg-type and src-key
+;; Get message callback handlers for msg-type and src-key 
 (: get-dp-message-handlers (-> Datapool 
                                Symbol 
                                Data-Key 
-                               (U False Message-Callback-Handlers)))
+                               Message-Callback-Handlers-Union))
 (define (get-dp-message-handlers [env : Datapool] 
                                  [msg-type : Symbol] 
                                  [src-key : Data-Key])
@@ -955,23 +974,23 @@
 ;; documentation for the (go) function).
 ;;
 ;; Example:
-;; (define-message-handler 
+;; (register-message-handler 
 ;;   example-env 
 ;;   example-handler 
 ;;   (data-changed-type example-key 'example-field)                  ;<== when we get this message 
 ;;   #f                                                              ;<== from this source
 ;;   (list (list example-input-key 'example-input-field))            ;<== give these data values (and the message) as input into example-handler
 ;;   (list (list '#:data ex-destination-key 'ex-destination-field))) ;<== use these to direct where the output from example-handler is stored 
-(: define-message-handler (-> Datapool
-                              Procedure
-                              Symbol
-                              Data-Key
-                              Input-List
-                              Return-List
-                              Boolean))
-(define (define-message-handler 
+(: register-message-handler (-> Datapool
+                                Coroutine
+                                Symbol
+                                Data-Key
+                                Input-List
+                                Return-List
+                                Boolean))
+(define (register-message-handler 
           [env : Datapool]
-          [coroutine-procedure : Procedure]
+          [coroutine-procedure : Coroutine]
           [msg-type : Symbol]
           [src-key : Data-Key #f] 
           [input-data : Input-List #f]
@@ -1000,35 +1019,36 @@
 (define (get-input-data [env : Datapool] [input-key-field-list : Input-List])
   (map 
     (lambda (data-key-field-pair) 
-      (let ([key (car data-key-field-pair)]
-            [field (cadr data-key-field-pair)])
-        (if field 
-            (get-data-field env key field)
-            (get-data env key))))
+      (if (list? data-key-field-pair)
+          (let ([key (car data-key-field-pair)]
+                [field (cadr data-key-field-pair)])
+            (if field 
+                (get-data-field env key field)
+                (get-data env key)))
+          '#:invalid))
     input-key-field-list))
 
 
 ;; coroutine to manage sending messages to connected handlers
 (define-coroutine 
   (send-message-co [env : Datapool] [msg : Message] [src-key : Data-Key])
-  (let ([handlers (get-dp-message-handlers 
-                    env
-                    (message-type msg)
-                    src-key)])
+  (let ([handlers : Message-Callback-Handlers-Union (get-dp-message-handlers 
+                                                      env
+                                                      (message-type msg)
+                                                      src-key)])
     (if handlers
         (let ()
-          (map
-            (lambda (i)
-              (let ([handler (car i)]
-                    [input-key-field-list (cadr i)]
-                    [return-key-field-list (caddr i)])
+          (for-each
+            (lambda ([i : Message-Callback-Handler])
+              (let ([handler : Coroutine-Generator (car i)]
+                    [input-key-field-list : Input-List (cadr i)]
+                    [return-key-field-list : Return-List (caddr i)])
                 (if input-key-field-list 
                     ;if input-key-field-list exists, grab the data and pass to 
                     ;handler coroutine alongside the message
-                    (go 
-                      env 
-                      (handler msg (get-input-data env input-key-field-list)) 
-                      return-key-field-list)
+                    (go env 
+                        (handler msg (get-input-data env input-key-field-list)) 
+                        return-key-field-list)
                     ;otherwise just pass the message to the coroutine
                     (go env (handler msg) return-key-field-list))))
             handlers)
@@ -1287,7 +1307,7 @@
 
 
 ;; Return a task from a thread queue to execute
-(define-type Datapool-Task (List Datapool Procedure Return-List))
+(define-type Datapool-Task (List Datapool Coroutine Return-List))
 (: get-task (-> Computepool Exact-Nonnegative-Integer Datapool-Task))
 (define (get-task [computepool : Computepool] [thread-idx : Exact-Nonnegative-Integer])
   (let ([q-idx (get-task-q-idx computepool thread-idx)])
@@ -1302,7 +1322,8 @@
             (semaphore-post (get-dp-queue-sem computepool q-idx))
             ret)))))
 
-
+(: *DP-THREAD-CLEAN-DIE* Boolean)
+(define *DP-THREAD-CLEAN-DIE* #f)
 
 ;; Evaluate given task, limits cpu starvation by limiting continuous 
 ;; evaluations in coroutines. If provided task is *not* a coroutine and/or 
@@ -1330,7 +1351,7 @@
 
 
 ;; Eternal thread tail recursion of executing tasks 
-;(: dp-thread (-> Computepool Exact-Nonnegative-Integer dp-thread))
+(: dp-thread (-> Computepool Exact-Nonnegative-Integer #t))
 (define (dp-thread [computepool : Computepool] 
                    [thread-idx : Exact-Nonnegative-Integer]) 
   (with-handlers 
@@ -1361,7 +1382,9 @@
             (thread-resume thread) ;resume thread waiting to invoke (go)
             (enqueue! (get-waiting-threads-queue computepool))))) ;thread not ready to resume
     (semaphore-post (get-waiting-threads-queue-sem computepool)))
-  (dp-thread computepool thread-idx))
+  (if *DP-THREAD-CLEAN-DIE*
+      #t
+      (dp-thread computepool thread-idx)))
 
 
 ;; Thread startup coroutine
@@ -1388,7 +1411,8 @@
 
 ;; Wait until total task queue lengths == 0
 (define (wait-len [env : Datapool])
-  (define [cenv : Computepool] (get-computepool env))
+  (: cenv Computepool)
+  (define cenv (get-computepool env))
 
   (: idxs (Listof Exact-Nonnegative-Integer))
   (define idxs (list))
@@ -1406,7 +1430,7 @@
                      idxs)]
           [done #t])
       (for-each 
-        (lambda ([len : Exact-Nonnegative-Integer]) 
+        (lambda ([len : Real]) 
           (when (> len 0) (set! done #f)))
         lens)
       (if done
