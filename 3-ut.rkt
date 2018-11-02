@@ -3,7 +3,7 @@
 ;;--------------------------------------
 
 ;; Calculate iterations per second 
-(: iterations-per-second (-> Real Real Real))
+(: iterations-per-second (-> Number Real))
 (define (iterations-per-second milli iter) (/ iter (/ milli 1000)))
 ;;**************************************
 
@@ -45,14 +45,14 @@
     (: test-num Integer)
     (define test-num 1)
 
-    (: co-test1 (-> Coroutine))
+    (: co-test1 (-> Any))
     (define-coroutine
       (co-test1) 
       (yield 1)
       (yield 2)
       #f)
 
-    (: ct1 Coroutine)
+    (: ct1 (-> Any))
     (define ct1 (co-test1))
 
     ;Test the coroutine runs correctly
@@ -64,14 +64,14 @@
     (test-true? "coroutine returns #f" (not (ct1)) pr wait)
     (test-true? "coroutine dead" (ct1 'dead?) pr wait)
 
-    (: co-test2 (-> Any Any Coroutine))
+    (: co-test2 (-> Any))
     (define-coroutine
       (co-test2 arg1 arg2)
       (yield arg1)
       (yield arg2)
       #f)
 
-    (: ct2 Coroutine)
+    (: ct2 (-> Any))
     (define ct2 (co-test2 "teststring" 'test))
 
     ;Test coroutine can be run with arguments
@@ -96,7 +96,7 @@
 
     ;Should *not* raise an exception due to the stateful (set!)
     (with-handlers ([exn:fail:user? (lambda (e) (test-fail e))])
-                   (: co-test3 (-> Any * Any))
+                   (: co-test3 (-> Any Any))
                    (define-coroutine 
                      (co-test3 arg1)
                      (yield arg1)
@@ -119,7 +119,7 @@
     ;as a tail form. I'm also not sure it actually *counts* as true tail recursion in that 
     ;sense (that racket will understand what's happening and properly adapt instead
     ;of generating new stack frames)
-    (: co-test4 (-> Any * Any))
+    (: co-test4 (-> Any Any))
     (define-coroutine (co-test4 val)
                       (define (recurse-func val)
                         (if (equal? val 0)
