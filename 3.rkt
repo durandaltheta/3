@@ -203,7 +203,7 @@
 
 ;; PUBLIC API
 ;Designate & print current test section with description 
-(: test-section (-> String Boolean Void))
+(: test-section (->* (String) (Boolean) Void))
 (define (test-section name [print #t])
   (when (not (string? name))
     (raise-inv-arg "name not a string" name))
@@ -257,7 +257,7 @@
 
 ;; PUBLIC API
 ;; Return #t if quoted forms return an equal value, else #f 
-(: test-equal? (->* (Any Any) (Boolean Boolean) Void))
+(: test-equal? (->* (String Any Any) (Boolean Boolean) Void))
 (define (test-equal? description form-a form-b [print-result #t] [wait #f])
   (when (not (string? description))
     (raise-inv-arg "description not a string" description))
