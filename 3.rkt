@@ -7,11 +7,6 @@
 ;; Currently no type for Queue?
 (define-type Queue Any) 
 
-(define-type Object Any)
-
-(require/typed typed/racket/class
-               [dynamic-get-field (-> Symbol Object Any)]
-               [dynamic-set-field! (-> Symbol Object Any Void)])
 (require/typed data/queue 
                [make-queue (-> Queue)]
                [enqueue! (-> Queue Any Void)]
@@ -88,7 +83,7 @@
 (define-struct (invalid-argument exn:fail:user) ())
 
 (: raise-inv-arg (-> String Any Any))
-(define (raise-inv-arg e [var #f]) 
+(define (raise-inv-arg [e : String] [var : Any #f]) 
   (let ([o (open-output-string)])
     (if (not (equal? var #f))
         (fprintf o "ERROR Invalid Argument: Symbol: ~a; ~a" var e)
@@ -104,7 +99,7 @@
 ;;;----------------------------------------------------------------------------
 (: get-n-items (-> (Listof Any) Integer (Listof Any)))
 (define get-n-items
-  (lambda (lst num)
+  (lambda ([lst : (Listof Any)] [num : Integer])
     (if (> num 0)
         (cons (car lst) (get-n-items (cdr lst) (- num 1)))
         '()))) ;'
@@ -171,40 +166,34 @@
   (set! *failed-tests* (list))
   (set! *cur-test-section* ""))
 
-(: get-test-num (-> Integer))
 (define (get-test-num)
   (let ([num *test-number*])
     (set! *test-number* (add1 *test-number*))
     num))
 
-;Append test results to the global tallies 
-(: collate-test (-> (Pair Boolean String) Void))
-(define (collate-test pass-fail)
+;Append test results to the global tallies
+(define (collate-test [pass-fail : (Pair Boolean String)])
   (if (car pass-fail)
       (let ([test-string (cdr pass-fail)])
         (set! *num-passes* (add1 *num-passes*))
         (set! *passed-tests* (append *passed-tests* (list test-string))))
       (let ([test-string (cdr pass-fail)])
         (set! *num-fails* (add1 *num-fails*))
-        (set! *failed-tests* (append *failed-tests* (list test-string)))))
-  (void))
+        (set! *failed-tests* (append *failed-tests* (list test-string))))))
 
 ;; PUBLIC API
-;Print final test results 
-(: print-test-report (-> Void))
+;Print final test results
 (define (print-test-report)
   (printf "\nNumber of test passes: ~a\n" *num-passes*)
   (printf "Number of test failures: ~a\n\n" *num-fails*)
   (printf "Failed tests:\n")
   (for ([i *failed-tests*])
        (printf "\t~a" i))
-  (reset-test-results)
-  (void))
+  (reset-test-results))
 
 ;; PUBLIC API
-;Designate & print current test section with description 
-(: test-section (-> String Boolean Void))
-(define (test-section name [print #t])
+;Designate & print current test section with description
+(define (test-section [name : String] [print : Boolean #t])
   (when (not (string? name))
     (raise-inv-arg "name not a string" name))
   (when (not (boolean? print))
@@ -220,13 +209,11 @@
           (set! *tests-started* #t))
       (print-test-divider "#")
       (printf "### test-section ~a\n" name)
-      (print-test-divider "#")))
-  (void))
+      (print-test-divider "#"))))
 
 ;; PUBLIC API
 ;; Return #t if the quoted form returns #t, else #f 
-(: test-true? (-> String Any Boolean Boolean Void))
-(define (test-true? description form [print-result #t] [wait #f])
+(define (test-true? description form [print-result : Boolean #t] [wait : Boolean #f])
   (when (not (string? description))
     (raise-inv-arg "description not a string" description))
   (when (not (boolean? print-result))
@@ -252,13 +239,11 @@
               (read-line (current-input-port) 'any))))
         (let ([ret (cons #f (get-output-string o))])
           (collate-test ret)
-          ret)))
-  (void))
+          ret))))
 
 ;; PUBLIC API
-;; Return #t if quoted forms return an equal value, else #f 
-(: test-equal? (-> Any Any Boolean Boolean Void))
-(define (test-equal? description form-a form-b [print-result #t] [wait #f])
+;; Return #t if quoted forms return an equal value, else #f
+(define (test-equal? description [form-a : Any] [form-b : Any] [print-result : Boolean #t] [wait : Boolean #f])
   (when (not (string? description))
     (raise-inv-arg "description not a string" description))
   (when (not (boolean? print-result))
@@ -284,14 +269,12 @@
               (read-line (current-input-port) 'any))))
         (let ([ret (cons #f (get-output-string o))])
           (collate-test ret)
-          ret)))
-  (void))
+          ret))))
 
 
 ;; PUBLIC API
-;; Custom test fail 
-(: test-fail (-> String Any Boolean Boolean Void))
-(define (test-fail description form [print-result #t] [wait #f])
+;; Custom test fail
+(define (test-fail [description : String] [form : Any] [print-result : Boolean #t] [wait : Boolean #f])
   (when (not (string? description))
     (raise-inv-arg "description not a string" description))
   (when (not (boolean? print-result))
@@ -309,14 +292,12 @@
           (read-line (current-input-port) 'any))))
     (let ([ret (cons #f (get-output-string o))])
       (collate-test ret)
-      ret))
-  (void))
+      ret)))
 
 
 ;; PUBLIC API
-;; Custom test pass 
-(: test-pass (-> String Any Boolean Void))
-(define (test-pass description form [print-result #t])
+;; Custom test pass
+(define (test-pass description [form : Any] [print-result : Boolean #t])
   (when (not (string? description))
     (raise-inv-arg "description not a string" description))
   (when (not (boolean? print-result))
@@ -328,8 +309,7 @@
       (printf (get-output-string o)))
     (let ([ret (cons #t (get-output-string o))])
       (collate-test ret)
-      ret))
-  (void))
+      ret)))
 
 
 
@@ -340,7 +320,7 @@
 (define-type Coroutine-Generator (-> Any * Coroutine))
 
 (: make-generator (-> (-> Any * Any) Coroutine))
-(define (make-generator procedure)
+(define (make-generator [procedure : (-> Any * Any)])
 
   (define last-return values)
 
@@ -376,7 +356,7 @@
                        ((eq? (car args) 'dead?) (eq? status 'dead))
                        ((eq? (car args) 'suspended?) (not (eq? status 'dead)))
                        ((eq? (car args) 'kill!) (set! status 'dead)))))))
-  ;(#t (apply last-continuation args)))))))
+                       ;(#t (apply last-continuation args)))))))
   coroutine)
 
 
@@ -397,216 +377,66 @@
 ;;; COMMUNICATION - channels
 ;;;---------------------------------------------------------------------------- 
 ;;create an async channel, no size limit by default 
-(define-type Async-Channel (Async-Channelof Any))
 (define-type Async-Channel-Size-Union (U Exact-Positive-Integer False))
 
-(: channel (-> Async-Channel-Size-Union Async-Channel))
-(define (channel [size #f]) 
+(: channel (-> Async-Channel-Size-Union (Async-Channelof Any)))
+(define (channel [size : Async-Channel-Size-Union #f]) 
   (make-async-channel size))
 
 
 ;;channel get, blocks by default 
-(: ch-get (-> Async-Channel Boolean Any))
-(define (ch-get ch [block #t])
+(: ch-get (-> (Async-Channelof Any) Boolean Any))
+(define (ch-get [ch : (Async-Channelof Any)] [block : Boolean #t])
   (if block
       (async-channel-get ch)
       (async-channel-try-get ch)))
 
 
 ;;channel put 
-(: ch-put (-> Async-Channel Any Void))
-(define (ch-put ch item)
+(: ch-put (-> (Async-Channelof Any) Any Void))
+(define (ch-put [ch : (Async-Channelof Any)] [item : Any])
   (async-channel-put ch item))
-
-
-
-;;;----------------------------------------------------------------------------
-;;; COMPUTEPOOL
-;;;---------------------------------------------------------------------------- 
-(define-type Worker-Thread-Data (Vector Thread Queue Semaphore))
-
-;;create computepool environment of worker threads 
-(define-type Computepool (Vector (Vector Exact-Nonnegative-Integer 
-                                         Queue 
-                                         Semaphore
-                                         Boolean 
-                                         Boolean) 
-                                 (Vectorof Worker-Thread-Data)))
-(: make-computepool (-> Exact-Nonnegative-Integer Computepool))
-(define (make-computepool num-threads)
-  (let ([com (cast (vector 
-                     (vector ;datapool info vector 
-                       num-threads
-                       (make-queue) ;queue of threads waiting to invoke (go)
-                       (make-semaphore 1) ;sem for sleeping thread queues
-                       #f ;boolean state to cleanly kill computepool workers
-                       #f) ;boolean state to cleanly suspend computepool workers
-                     (make-vector ;threads, queues, and semaphores
-                       num-threads)) Computepool)])
-
-    (for ([i num-threads])
-         (let ()
-           (vector-set! 
-             (vector-ref com 1) 
-             i
-             (vector 
-               (thread (thunk (dp-thread-start com))) ;worker thread
-               (make-queue) ;thread task queues
-               (make-semaphore 1))))) ;thread task queue semaphores 
-    (cast com Computepool)))
-
-
-;; Global for maximum datapool task queue size 
-(: *MAX-CP-QUEUE-SIZE* Exact-Nonnegative-Integer)
-(define *MAX-CP-QUEUE-SIZE* 255)
-
-
-(: get-num-cp-threads (-> Computepool Exact-Nonnegative-Integer))
-(define (get-num-cp-threads computepool) 
-  (vector-ref (vector-ref computepool 0) 0))
-
-
-;; PUBLIC API
-;; Return the internally specified computepool of worker threads
-(: get-computepool (-> Datapool Computepool))
-(define (get-computepool env)
-  (vector-ref (unbox env) 0))
-
-
-(: get-cp-die-state (-> Computepool Boolean))
-(define (get-cp-die-state cenv) 
-  (vector-ref (vector-ref cenv 0) 3))
-
-
-(: set-cp-die-state (-> Computepool Boolean Void))
-(define (set-cp-die-state cenv state) 
-  (vector-set! (vector-ref cenv 0) 3 state))
-
-
-(: get-cp-suspend-state (-> Computepool Boolean))
-(define (get-cp-suspend-state cenv) 
-  (vector-ref (vector-ref cenv 0) 4))
-
-
-(: set-cp-suspend-state (-> Computepool Boolean Void))
-(define (set-cp-suspend-state cenv state) 
-  (vector-set! (vector-ref cenv 0) 4 state))
-
-
-;; Return queue of sleeping threads waiting to invoke (go) 
-(: get-waiting-threads-queue (-> Computepool Queue))
-(define (get-waiting-threads-queue computepool) 
-  (vector-ref (vector-ref computepool 0) 1))
-
-
-;; Return queue of sleeping threads waiting to invoke (go) 
-(: get-waiting-threads-queue-sem (-> Computepool Semaphore))
-(define (get-waiting-threads-queue-sem computepool) 
-  (vector-ref (vector-ref computepool 0) 2))
-
-
-;; Get a thread pid at provided index 
-(: get-cp-thread (-> Computepool Exact-Nonnegative-Integer Thread))
-(define (get-cp-thread computepool idx)
-  (vector-ref 
-    (vector-ref 
-      (vector-ref 
-        computepool
-        1) 
-      idx) 
-    0))
-
-
-;; Get a thread task queue at provided index 
-(: get-cp-queue (-> Computepool Exact-Nonnegative-Integer Queue))
-(define (get-cp-queue computepool idx)
-  (vector-ref 
-    (vector-ref 
-      (vector-ref 
-        computepool
-        1) 
-      idx) 
-    1))
-
-
-;; Get a thread task queue semaphore at provided index 
-(: get-cp-queue-sem (-> Computepool Exact-Nonnegative-Integer Semaphore))
-(define (get-cp-queue-sem computepool idx)
-  (vector-ref 
-    (vector-ref 
-      (vector-ref 
-        computepool
-        1) 
-      idx) 
-    2))
-
-
-;; Get the index of the fullest thread task queue 
-(: get-max-cp-q-idx (-> Computepool Exact-Nonnegative-Integer))
-(define (get-max-cp-q-idx computepool)
-  (: get-max-cp-q-idx-intern (-> Computepool
-                                 Exact-Nonnegative-Integer
-                                 Exact-Nonnegative-Integer
-                                 Exact-Nonnegative-Integer
-                                 Exact-Nonnegative-Integer))
-  (define (get-max-cp-q-idx-intern computepool
-                                   num-threads
-                                   longest-idx
-                                   count)
-    (let ([new-count (+ count 1)])
-      (if (< count num-threads)
-          (if (>= (queue-length (get-cp-queue computepool longest-idx))
-                  (queue-length (get-cp-queue computepool count)))
-              (get-max-cp-q-idx-intern computepool
-                                       num-threads
-                                       longest-idx 
-                                       new-count)
-              (get-max-cp-q-idx-intern computepool
-                                       num-threads
-                                       count 
-                                       new-count))
-          longest-idx)))
-  (get-max-cp-q-idx-intern computepool (get-num-cp-threads computepool) 0 1))
-
-
-;; Get the index of the emptiest thread task queue
-(: get-min-cp-q-idx (-> Computepool Exact-Nonnegative-Integer))
-(define (get-min-cp-q-idx computepool)
-  (: get-min-cp-q-idx-intern (-> Computepool
-                                 Exact-Nonnegative-Integer
-                                 Exact-Nonnegative-Integer
-                                 Exact-Nonnegative-Integer
-                                 Exact-Nonnegative-Integer))
-  (define (get-min-cp-q-idx-intern computepool
-                                   num-threads
-                                   shortest-idx
-                                   count)
-    (let ([new-count (+ count 1)])
-      (if (< count num-threads)
-          (if (>= (queue-length (get-cp-queue computepool shortest-idx))
-                  (queue-length (get-cp-queue computepool count)))
-              (get-min-cp-q-idx-intern computepool 
-                                       num-threads
-                                       shortest-idx 
-                                       new-count)
-              (get-min-cp-q-idx-intern computepool
-                                       num-threads
-                                       count 
-                                       new-count))
-          shortest-idx)))
-  (get-min-cp-q-idx-intern computepool (get-num-cp-threads computepool) 0 1))
 
 
 
 ;;;----------------------------------------------------------------------------
 ;;; DATAPOOL
 ;;;---------------------------------------------------------------------------- 
+
+;;create computepool environment of worker threads 
+(define-type Computepool (Vector (Vector Exact-Nonnegative-Integer 
+                                         Queue 
+                                         Semaphore) 
+                                 (Vector Thread
+                                         Queue 
+                                         Semaphore))) 
+(: make-computepool (-> Exact-Nonnegative-Integer Computepool))
+(define (make-computepool [num-threads : Exact-Nonnegative-Integer])
+  (let ([ret : Computepool
+             (vector 
+               (vector ;datapool info vector 
+                 num-threads
+                 (make-queue) ;queue of threads waiting to invoke (go)
+                 (make-semaphore 1)) ;sem for sleeping thread queue
+               (make-vector ;threads, queues, and semaphores
+                 num-threads))])
+    (for ([i num-threads])
+         (let ()
+           (vector-set! 
+             (vector-ref ret 1) 
+             i
+             (vector 
+               (thread (thunk (dp-thread-start ret))) ;threads
+               (make-queue) ;thread task queues
+               (make-semaphore 1))))) ;thread task queue semaphores 
+    ret))
+
 ;; Data type def
 (define-type Data-Key (U Exact-Nonnegative-Integer False))
 (define-type Data-Field (U False Symbol))
 
 ;; Return destination type defs
-(define-type Return-List-Channel-Entry (List Keyword Async-Channel))
+(define-type Return-List-Channel-Entry (List Keyword Async-ChannelTop))
 (define-type Return-List-Data-Entry (List Keyword Data-Key Data-Field))
 (define-type Return-List-Message-Entry (List Keyword Any Data-Key))
 (define-type Return-List-Datapool-Entry (List Keyword Datapool Data-Key Data-Field))
@@ -629,18 +459,10 @@
 (define-type Message-Callback-Hash 
              (Mutable-HashTable Data-Key 
                                 (Mutable-HashTable Data-Key 
-                                                   Message-Callback-Handlers-Union))) 
-
-(: make-message-callback-hash (-> Message-Callback-Hash))
-(define (make-message-callback-hash)
-  (cast (make-hash) Message-Callback-Hash))
+                                                   Message-Callback-Handlers)))
 
 ;; Data Hash type def
 (define-type Data-Hash (Mutable-HashTable Data-Key Any))
-(: make-data-hash (-> Data-Hash))
-(define (make-data-hash)
-  (cast (make-hash) Data-Hash))
-
 
 ;; Datapool type def
 (define-type Datapool (Boxof (Vector Computepool
@@ -653,29 +475,142 @@
 
 ;;create datapool environment of hashed data and message callbacks 
 (: make-datapool (-> Computepool Datapool))
-(define (make-datapool computepool) 
-  (let ([key-src : Data-Key 0])
-    (let ([ret : Datapool
-               (cast (box 
-                       (vector  
-                         computepool
-                         (vector ;message handler vector
-                           (make-message-callback-hash) ;hash table of lists of message handlers
-                           (make-semaphore 1)) ;message handlers semaphore
-                         (vector ;user data vector
-                           (make-data-hash) ;hash table of data objects
-                           (make-semaphore 1) ;data hash semaphore
-                           key-src ;data-obj-key-src
-                           (make-queue)))) Datapool)]) ;data-obj-free-key-q 
-      ret))) ;return a 'by reference' symbol
+(define (make-datapool [computepool : Computepool]) 
+  (let* ([key-src : Data-Key 0]
+         [ret : Datapool
+              (box 
+                (vector  
+                  computepool
+                  (vector ;message handler vector
+                    (make-hash) ;hash table of lists of message handlers
+                    (make-semaphore 1)) ;message handlers semaphore
+                  (vector ;user data vector
+                    (make-hash) ;hash table of data objects
+                    (make-semaphore 1) ;data hash semaphore
+                    key-src ;data-obj-key-src
+                    (make-queue))))]) ;data-obj-free-key-q 
+    ret)) ;return a 'by reference' symbol
+
+
+;; Global for maximum datapool task queue size 
+(: *MAX-DP-QUEUE-SIZE* Exact-Nonnegative-Integer)
+(define *MAX-DP-QUEUE-SIZE* 255)
+
+
+(: get-num-dp-threads-intern (-> Computepool Exact-Nonnegative-Integer))
+(define (get-num-dp-threads-intern [computepool : Computepool]) 
+  (vector-ref (vector-ref computepool 0) 0))
+
+
+;; PUBLIC API
+;; Return the internally specified computepool of worker threads
+(: get-computepool (-> Datapool Computepool))
+(define (get-computepool [env : Datapool])
+  (vector-ref (unbox env) 0))
 
 
 ;; PUBLIC API
 ;; Return number of threads in the datapool 
 (: get-num-dp-threads (-> Datapool Exact-Nonnegative-Integer))
-(define (get-num-dp-threads env) 
+(define (get-num-dp-threads [env : Datapool]) 
   (vector-ref (vector-ref (vector-ref (unbox env) 0) 0) 0))
 
+
+;; Return queue of sleeping threads waiting to invoke (go) 
+(: get-waiting-threads-queue (-> Computepool Queue))
+(define (get-waiting-threads-queue [computepool : Computepool]) 
+  (vector-ref (vector-ref computepool 0) 1))
+
+
+;; Return queue of sleeping threads waiting to invoke (go) 
+(: get-waiting-threads-queue-sem (-> Computepool Semaphore))
+(define (get-waiting-threads-queue-sem [computepool : Computepool]) 
+  (vector-ref (vector-ref computepool 0) 2))
+
+
+;; PUBLIC API
+;;kill all threads and processes in a datapool 
+(: close-dp (-> Datapool Void))
+(define (close-dp [env : Datapool])
+  ;kill threads
+  (for ([i (get-num-dp-threads env)])
+       (kill-thread (vector-ref 
+                      (vector-ref 
+                        (vector-ref 
+                          (vector-ref 
+                            (unbox env) 
+                            0) 
+                          1) 
+                        i) 
+                      0))))
+
+
+
+;;;----------------------------------------------------------------------------
+;;; COMPUTATION - thread management
+;;;----------------------------------------------------------------------------
+;;;threads
+;; Get a thread pid at provided index 
+(: get-dp-thread (-> Computepool Exact-Nonnegative-Integer Thread))
+(define (get-dp-thread [computepool : Computepool] [idx : Exact-Nonnegative-Integer])
+  (vector-ref 
+    (vector-ref 
+      (vector-ref 
+        computepool
+        1) 
+      idx) 
+    0))
+
+
+;; Get a thread task queue at provided index 
+(: get-dp-queue (-> Computepool Exact-Nonnegative-Integer Queue))
+(define (get-dp-queue [computepool : Computepool] [idx : Exact-Nonnegative-Integer])
+  (vector-ref 
+    (vector-ref 
+      (vector-ref 
+        computepool
+        1) 
+      idx) 
+    1))
+
+
+;; Get a thread task queue semaphore at provided index 
+(: get-dp-queue-sem (-> Computepool Exact-Nonnegative-Integer Semaphore))
+(define (get-dp-queue-sem [computepool : Computepool] [idx : Exact-Nonnegative-Integer])
+  (vector-ref 
+    (vector-ref 
+      (vector-ref 
+        computepool
+        1) 
+      idx) 
+    2))
+
+
+;; Get the index of the fullest thread task queue 
+(: get-max-dp-q-idx (-> Computepool Exact-Nonnegative-Integer))
+(define (get-max-dp-q-idx [computepool : Computepool])
+  (: longest Pair)
+  (define longest (cons (queue-length (get-dp-queue computepool 0)) 0))
+  (when (> (get-num-dp-threads-intern computepool) 1)
+    (for ([i (in-range 1 (get-num-dp-threads-intern computepool))])
+         (let ([cur-q-len (queue-length (get-dp-queue computepool i))])
+           (when (< (car longest) cur-q-len)
+             (begin
+               (set! longest (cons cur-q-len i)))))))
+  (cdr longest))
+
+
+;; Get the index of the emptiest thread task queue
+(: get-min-dp-q-idx (-> Computepool Exact-Nonnegative-Integer))
+(define (get-min-dp-q-idx [computepool : Computepool])
+  (define shortest (cons (queue-length (get-dp-queue computepool 0)) 0))
+  (when (> (get-num-dp-threads-intern computepool) 1)
+    (for ([i (in-range 1 (get-num-dp-threads-intern computepool))])
+         (let ([cur-q-len (queue-length (get-dp-queue computepool i))])
+           (when (> (car shortest) cur-q-len)
+             (begin
+               (set! shortest (cons cur-q-len i)))))))
+  (cdr shortest))
 
 
 ;; PUBLIC API
@@ -711,116 +646,112 @@
 ;;       (list '#:data key2 field2) 
 ;;       (list '#:message type source))
 (: go (-> Datapool Coroutine Return-List Boolean))
-(define (go env suspended-coroutine [return-destinations #f])
+(define (go [env : Datapool] 
+            [suspended-coroutine : Coroutine] 
+            [return-destinations : Return-List #f])
   (when (not (procedure? suspended-coroutine))
     (raise-inv-arg "suspended-coroutine not a procedure" suspended-coroutine))
   (when (not (equal? (suspended-coroutine 'coroutine?) 'coroutine))
     (raise-inv-arg "suspended-coroutine not a coroutine" suspended-coroutine))
 
   (let ([computepool (get-computepool env)])
-    (let ([q-idx (get-min-cp-q-idx computepool)])
+    (let ([q-idx (get-min-dp-q-idx computepool)])
       ;put current thread to sleep if not a datapool worker thread and trying to 
-      ;add too many (go) invocations or we're in a suspend/die state. 
-      ;
-      ;In the case of too many (go) invocations wait till queue empties a bit 
-      ;so as to not continuously increase the size of the queues (can massively
-      ;slow down program execution)
+      ;add too many (go) invocations, wait till queue empties a bit so as to not 
+      ;continuously increase the size of the queues (can massively slow down 
+      ;program execution)
       (let ([self (current-thread)]
             [num-threads (get-num-dp-threads env)]
-            [datapool-worker : Boolean #f])
+            [datapool-worker #f])
         (for ([i num-threads])
-             (when (equal? self (get-cp-thread computepool i))
+             (when (equal? self (get-dp-thread computepool i))
                (set! datapool-worker #t)))
 
         (when (not datapool-worker)
-          (when (or 
-                  (>= (queue-length (get-cp-queue computepool q-idx)) *MAX-CP-QUEUE-SIZE*)
-                  (get-cp-die-state computepool)
-                  (get-cp-suspend-state computepool))
+          (when (>= (queue-length (get-dp-queue computepool q-idx)) *MAX-DP-QUEUE-SIZE*)
             (semaphore-wait (get-waiting-threads-queue-sem computepool))
             (enqueue! (get-waiting-threads-queue computepool) self)
             (semaphore-post (get-waiting-threads-queue-sem computepool))
             (thread-suspend self))))
-      (semaphore-wait (get-cp-queue-sem computepool q-idx))
-      (enqueue! (get-cp-queue computepool q-idx) (list env
+      (semaphore-wait (get-dp-queue-sem computepool q-idx))
+      (enqueue! (get-dp-queue computepool q-idx) (list env
                                                        suspended-coroutine 
                                                        return-destinations))
-      (semaphore-post (get-cp-queue-sem computepool q-idx))
-      (thread-resume (get-cp-thread computepool q-idx))
+      (semaphore-post (get-dp-queue-sem computepool q-idx))
+      (thread-resume (get-dp-thread computepool q-idx))
       #t)))
 
 
 
 ;;;----------------------------------------------------------------------------
-;;; DATA - management
+;;; DATA
 ;;;----------------------------------------------------------------------------
 ;; Get the hash of data objects 
 (: get-data-hash (-> Datapool Data-Hash))
-(define (get-data-hash env)
+(define (get-data-hash [env : Datapool])
   (vector-ref (vector-ref (unbox env) 2) 0))
 
 
 ;; Get the data objects semaphore 
 (: get-data-sem (-> Datapool Semaphore))
-(define (get-data-sem env)
+(define (get-data-sem [env : Datapool])
   (vector-ref (vector-ref (unbox env) 2) 1))  
 
 
 ;; Get the data object current new key source integer 
 (: get-data-key-src (-> Datapool Data-Key))
-(define (get-data-key-src env)
+(define (get-data-key-src [env : Datapool])
   (vector-ref (vector-ref (unbox env) 2) 2)) 
 
 
 ;; Set the data object current new key source integer 
 (: set-data-key-src (-> Datapool Data-Key Void))
-(define (set-data-key-src env val)
+(define (set-data-key-src [env : Datapool] [val : Data-Key])
   (vector-set! (vector-ref (unbox env) 2) 2 val)) 
 
 
 ;; Get the queue of freed data keys 
 (: get-data-free-key-q (-> Datapool Queue))
-(define (get-data-free-key-q env)
+(define (get-data-free-key-q [env : Datapool])
   (vector-ref (vector-ref (unbox env) 2) 3))
 
 
 ;; Add a recycled data object key to the container queue 
 (: add-free-dp-data-key (-> Datapool Data-Key Void))
-(define (add-free-dp-data-key env key) 
+(define (add-free-dp-data-key [env : Datapool] [key : Data-Key]) 
   (enqueue! (get-data-free-key-q env) key))
 
 
 ;; Generate a new data object hash key 
 (: gen-dp-data-obj-key (-> Datapool Data-Key))
-(define (gen-dp-data-obj-key env)
+(define (gen-dp-data-obj-key [env : Datapool])
   (if (> (queue-length (get-data-free-key-q env)) 0) 
-      (cast (dequeue! (get-data-free-key-q env)) Data-Key)
-      (let ([ret (cast (get-data-key-src env) Exact-Nonnegative-Integer)])
-        (set-data-key-src env (cast (+ ret 1) Data-Key)) 
+      (dequeue! (get-data-free-key-q env))
+      (let ([ret (get-data-key-src env)])
+        (set-data-key-src env (+ (get-data-key-src env) 1)) 
         ret)))
 
 
 ;; PUBLIC API
 ;; Get a data object reference from the hash 
 (: get-data (-> Datapool Data-Key Any))
-(define (get-data env key)
-  (hash-ref (get-data-hash env) key (lambda () 'not-found)))
+(define (get-data [env : Datapool] [key : Data-Key])
+  (hash-ref (get-data-hash env) key 'not-found))
 
 
 ;; PUBLIC API
 ;; Get the value of a data object's field 
 (: get-data-field (-> Datapool Data-Key Data-Field Any))
-(define (get-data-field env key field)
+(define (get-data-field [env : Datapool] [key : Data-Key] [field : Data-Field])
   (let ([data (get-data env key)])
     (if (equal? data 'not-found)
-        data 
-        (if field
-            (let ([ret : Any 'not-found])
-              (semaphore-wait (get-data-sem env))
-              (set! ret (dynamic-get-field (cast field Symbol) (cast data Object)))
-              (semaphore-post (get-data-sem env))
-              ret) 
-            'not-found))))
+        data
+        (let 
+          ([ret 'not-found])
+          (semaphore-wait (get-data-sem env))
+          (set! ret (dynamic-get-field field data))
+          (semaphore-post (get-data-sem env))
+          ret))))
 
 
 ;; PUBLIC API 
@@ -835,7 +766,7 @@
 ;;   (list (list example-input-key 'example-input-field))            ;<== give these data values (and the message) as input into example-handler
 ;;   (list (list '#:data ex-destination-key 'ex-destination-field))) ;<== use these to direct where the output from example-handler is stored  
 (: data-changed-type (-> Data-Key Data-Field Symbol))
-(define (data-changed-type key [field #f])
+(define (data-changed-type [key : Data-Key] [field : Data-Field #f])
   (let ([o (open-output-string)])
     (if field 
         (let ()
@@ -849,34 +780,33 @@
 ;; PUBLIC API
 ;; Redefine data object field) 
 (: set-data-field! (-> Datapool Data-Key Data-Field Any Boolean))
-(define (set-data-field! env key field val)
+(define (set-data-field! [env : Datapool] [key : Data-Key] [field : Data-Field] [val : Any])
   (let ([data (get-data env key)])
-    (if (equal? data 'not-found)
-        #f 
-        (if field 
-            #f
-            (let ()
-              (semaphore-wait (get-data-sem env))
-              (dynamic-set-field! (cast field Symbol) (cast (get-data env key) Object) val)
-              (semaphore-post (get-data-sem env))
-              (send-message env (message (data-changed-type key field) field))
-              #t)))))
+    (if (not (equal? data 'not-found))
+        (let ()
+          (semaphore-wait (get-data-sem env))
+          (dynamic-set-field! field (get-data env key) val)
+          (semaphore-post (get-data-sem env))
+          (send-message env (message (data-changed-type key field) field))
+          #t)
+        #f)))
 
 
 ;; Hash data object at provided key 
 (: hash-data! (-> Datapool Data-Key Any Boolean))
-(define (hash-data! env data-key data)
+(define (hash-data! [env : Datapool] [data-key : Data-Key] [data : Any])
   (hash-set! (get-data-hash env) data-key data)
   #t)
 
 
 
 ;;;----------------------------------------------------------------------------
-;;; MESSAGING
+;;; COMMUNICATION - messaging
 ;;;---------------------------------------------------------------------------- 
 ;; message class 
-(define-type Message Object)
-
+(define-type Message (Object (field (src Data-Key) 
+                                    (type Symbol) 
+                                    (content Any))))
 (define message%
   (class object% 
          (super-new)
@@ -888,44 +818,41 @@
 
 ;; PUBLIC API
 ;; Create a message object 
-(define (message type content [source-key #f])
-  (cast (make-object message% 
-                     (cast source-key Data-Key) 
-                     (cast type Symbol)
-                     content) 
-        Message))
+(: message (-> Symbol Any Data-Key Message))
+(define (message [type : Symbol] [content : Any] [source-key : Data-Key #f])
+  (make-object message% source-key type content)) 
 
 
 ;; PUBLIC API
 ;; Return the message's type 
 (: message-type (-> Message Symbol))
-(define (message-type msg)
-  (cast (dynamic-get-field 'type (cast msg Object)) Symbol))
+(define (message-type [msg : Message])
+  (get-field type msg))
 
 
 ;; PUBLIC API
 ;; Return the message's content
 (: message-content (-> Message Any))
-(define (message-content msg)
-  (dynamic-get-field 'content (cast msg Object)))
+(define (message-content [msg : Message])
+  (get-field content msg))
 
 
 ;; PUBLIC API
 ;; Return the message's content 
 (: message-source (-> Message Data-Key))
-(define (message-source msg)
-  (cast (dynamic-get-field 'src (cast msg Object)) Data-Key))
+(define (message-source [msg : Message])
+  (get-field src msg))
 
 
 ;; Get the hash of message callback handlers 
 (: get-dp-message-handler-hash (-> Datapool Message-Callback-Hash))
-(define (get-dp-message-handler-hash env)
+(define (get-dp-message-handler-hash [env : Datapool])
   (vector-ref (vector-ref (unbox env) 1) 0))
 
 
 ;; Get the message callback handlers semaphore 
 (: get-dp-message-handler-hash-sem (-> Datapool Semaphore))
-(define (get-dp-message-handler-hash-sem env)
+(define (get-dp-message-handler-hash-sem [env : Datapool])
   (vector-ref (vector-ref (unbox env) 1) 1))
 
 ;; Get message callback handlers for msg-type and src-key 
@@ -933,13 +860,11 @@
                                Symbol 
                                Data-Key 
                                Message-Callback-Handlers-Union))
-(define (get-dp-message-handlers env msg-type src-key)
-  (if (hash-ref (get-dp-message-handler-hash env) msg-type (lambda () #f))
-      (hash-ref (cast (hash-ref (get-dp-message-handler-hash env) msg-type)
-                      (Mutable-HashTable Data-Key 
-                                         Message-Callback-Handlers-Union)) 
-                src-key 
-                (lambda () #f))
+(define (get-dp-message-handlers [env : Datapool] 
+                                 [msg-type : Symbol] 
+                                 [src-key : Data-Key])
+  (if (hash-ref (get-dp-message-handler-hash env) msg-type #f)
+      (hash-ref (hash-ref (get-dp-message-handler-hash env) msg-type) src-key #f)
       #f))
 
 
@@ -950,49 +875,50 @@
                                        Data-Key
                                        Message-Callback-Handlers
                                        Void))
-(define (set-dp-message-handlers-intern! env 
-                                         msg-type 
-                                         src-key 
-                                         handlers)
+(define (set-dp-message-handlers-intern! [env : Datapool] 
+                                         [msg-type : Symbol] 
+                                         [src-key : Data-Key] 
+                                         [handlers : Message-Callback-Handlers])
+  (: ret Boolean)
+  (define ret #t)
 
   ;; If msg-type hash doesn't exist create it
-  (if (hash-ref 
-        (get-dp-message-handler-hash env) 
-        msg-type 
-        #f)
-      #t
-      (let ()
-        (hash-set! 
-          (cast (get-dp-message-handler-hash env) 
-                (Mutable-HashTable Any Any))
-          (cast msg-type Any)
-          (cast (make-hash) Any))
-        #t))
+  (set! ret (and 
+              ret 
+              (if (hash-ref 
+                    (get-dp-message-handler-hash env) 
+                    msg-type 
+                    #f)
+                  #t
+                  (hash-set! 
+                    (get-dp-message-handler-hash env) 
+                    msg-type 
+                    (make-hash)))))
 
   ;; If src-key hash doesn't exist create it
-  (if (hash-ref 
-        (cast (hash-ref (cast (get-dp-message-handler-hash env) 
-                              (Mutable-HashTable Any Any))
-                        (cast msg-type Any)) 
-              (Mutable-HashTable Any Any))
-        (cast src-key Any)
-        #f)
-      #t
-      (hash-set! 
-        (cast (hash-ref (get-dp-message-handler-hash env) 
-                        msg-type) 
-              (Mutable-HashTable Any Any))
-        (cast src-key Any)
-        (cast (make-hash) Any)))
+  (set! ret (and ret 
+                 (if (hash-ref 
+                       (hash-ref 
+                         (get-dp-message-handler-hash env) 
+                         msg-type) 
+                       src-key 
+                       #f)
+                     #t
+                     (hash-set! 
+                       (hash-ref 
+                         (get-dp-message-handler-hash env) 
+                         msg-type) 
+                       src-key 
+                       (make-hash)))))
 
   ;; Set list of handlers
-  (hash-set! 
-    (cast (hash-ref 
-            (get-dp-message-handler-hash env) 
-            msg-type) (Mutable-HashTable Any Any))
-    (cast src-key Any)
-    (cast handlers Any))
-  (void))
+  (set! ret (and
+              ret 
+              (hash-set! 
+                (hash-ref 
+                  (get-dp-message-handler-hash env) 
+                  msg-type) 
+                src-key handlers))))
 
 
 ;; Set the message handlers list for msg-type and src-key to something new 
@@ -1001,7 +927,10 @@
                                 Data-Key
                                 Message-Callback-Handlers
                                 Boolean))
-(define (set-dp-message-handlers! env msg-type src-key handlers) 
+(define (set-dp-message-handlers! [env : Datapool] 
+                                  [msg-type : Symbol] 
+                                  [src-key : Data-Key] 
+                                  [handlers : Message-Callback-Handlers]) 
   ;; Take message sem first because another message handler may be using the 
   ;; data object sem, which would cause us to lock up
   (semaphore-wait (get-dp-message-handler-hash-sem env))
@@ -1060,12 +989,12 @@
                                 Return-List
                                 Boolean))
 (define (register-message-handler 
-          env
-          coroutine-procedure
-          msg-type
-          [src-key #f] 
-          [input-data #f]
-          [return-destinations #f])
+          [env : Datapool]
+          [coroutine-procedure : Coroutine]
+          [msg-type : Symbol]
+          [src-key : Data-Key #f] 
+          [input-data : Input-List #f]
+          [return-destinations : Return-List #f])
   (let ([msg-handlers (get-dp-message-handlers env msg-type src-key)])
     (if msg-handlers
         (set-dp-message-handlers! 
@@ -1100,7 +1029,7 @@
     input-key-field-list))
 
 
-;; coroutine to manage sending messages to connected handlers 
+;; coroutine to manage sending messages to connected handlers
 (define-coroutine 
   (send-message-co [env : Datapool] [msg : Message] [src-key : Data-Key])
   (let ([handlers : Message-Callback-Handlers-Union (get-dp-message-handlers 
@@ -1129,17 +1058,16 @@
 
 ;; PUBLIC API
 ;; Send a message to connected handlers in the current datapool 
-(: send-message (-> Datapool Message Void))
-(define (send-message env msg)
-  (go env (send-message-co env msg (message-source msg)))
-  (void))
+(: send-message (-> Datapool Message Boolean))
+(define (send-message [env : Datapool] [msg : Message])
+  (go env (send-message-co env msg (message-source msg))))
 
 
 ;; PUBLIC API
 ;; Data destructor. Removes message handlers, removes the data from the data 
 ;; hash, and enqueues the now free data key onto a free floating key queue 
 (: delete-data! (-> Datapool Data-Key Boolean))
-(define (delete-data! env data-key) 
+(define (delete-data! [env : Datapool] [data-key : Data-Key]) 
   ; Return #t if input is an atom
   (define (atom? [x : Any])
     (and (not (null? x))
@@ -1147,7 +1075,7 @@
 
   ; Return #t if element is in list tree 
   (: find-in-tree (-> Any Any Boolean))
-  (define (find-in-tree tree element)
+  (define (find-in-tree [tree : Any] [element : Any])
     (if (atom? tree)
         (if (equal? element tree) 
             #t 
@@ -1213,14 +1141,10 @@
         #f))) 
 
 
-
-;;;----------------------------------------------------------------------------
-;;; DATA - more management
-;;;---------------------------------------------------------------------------- 
 ;; PUBLIC API
 ;; Register new data object with the datapool and return the data's new key 
 (: register-data! (-> Datapool Any Data-Key))
-(define (register-data! env data)
+(define (register-data! [env : Datapool] [data : Any])
   (let* ([key (gen-dp-data-obj-key env)]
          [cur-data (get-data env key)]
          [ret #f])
@@ -1237,7 +1161,7 @@
 ;; PUBLIC API
 ;; Redefine data at key 
 (: set-data! (-> Datapool Data-Key Any Boolean))
-(define (set-data! env key value)
+(define (set-data! [env : Datapool] [key : Data-Key] [value : Any])
   (if (equal? (get-data env key) 'not-found)
       #f
       (let ()
@@ -1268,30 +1192,35 @@
 ;
 ;If a return value is '#:invalid, then the specific destination handler is 
 ;skipped. 
-(: handle-go-returns (-> Datapool Return-List Any Void))
-(define (handle-go-returns env return-dests return-vals)
+(: handle-go-returns (-> Datapool Return-List Any Boolean))
+(define (handle-go-returns [env : Datapool] [return-dests : Return-List] [return-vals : Any])
   ;If return-vals is a single atom put it in a list
   (when (not (list? return-vals))
     (set! return-vals (list return-vals)))
 
-  ;Handle any message returns 
-  (: handle-return-message (-> Symbol Any Data-Key Void))
-  (define (handle-return-message type content src)
-    (send-message env (message type content src))
-    (void))
+  ;Pop off the front of a list, returning the popped value and resulting list
+  (define (pop-list [inp-list : List])
+    (if (null? inp-list)
+        inp-list
+        (values (car inp-list) (cdr inp-list))))
 
-  ;Handle any data returns 
-  (: handle-return-data (-> Data-Key Data-Field Any Void))
-  (define (handle-return-data key field val)
+  ;Handle any message returns
+  (define (handle-return-message [type : Symbol] [content : Any] [src : Data-Key])
+    (send-message env (message type content src)))
+
+  ;Handle any data returns
+  (define (handle-return-data [key : Data-Key] [field : Data-Field] [val : Any])
     (if field
         ;set object field at data key
         (set-data-field! env key field val)
         ;replace data at key
-        (set-data! env key val))
-    (void))
+        (set-data! env key val)))
 
   ;Handle any alternative datapool returns
-  (define (handle-return-datapool return-env key field val)
+  (define (handle-return-datapool [return-env : Datapool] 
+                                  [key : Data-Key] 
+                                  [field : Data-Field] 
+                                  [val : Any])
     (if field 
         ;set object field at data key
         (set-data-field! return-env key field val)
@@ -1299,15 +1228,12 @@
         (set-data! return-env key val)))
 
   ;Handle any channel returns
-  (: handle-return-channel (-> Async-Channel Any Void))
-  (define (handle-return-channel ch val)
-    (ch-put ch val)
-    (void))
+  (define (handle-return-channel [ch : Async-ChannelTop] [val : Any])
+    (ch-put ch val))
 
   ;Attempt to do something with the provided return value and destination 
-  ;context 
-  (: handle-return (-> Return-List-Entry-Union Any Void))
-  (define (handle-return dest val)
+  ;context
+  (define (handle-return [dest : Return-List-Entry-Union] [val : Any])
     (let ([type : Keyword (car dest)])
       (if (equal? val '#:invalid)
           (values) ;do nothing
@@ -1316,8 +1242,7 @@
              (if (equal? (length dest) 3)
                  (let ([message-type : Symbol (cadr dest)]
                        [source : Data-Key (caddr dest)])
-                   (handle-return-message message-type val source)
-                   (void))
+                   (handle-return-message message-type val source))
                  (error "Incorrect number of arguments in '#:message (go) handler" (length dest)))]
             ['#:data 
              (if (equal? (length dest) 3)
@@ -1330,22 +1255,18 @@
                  (let ([return-env : Datapool (cadr dest)]
                        [key : Data-Key (caddr dest)]
                        [field : Data-Field (cadddr dest)])
-                   (handle-return-datapool return-env key field val)
-                   (void))
+                   (handle-return-datapool return-env key field val))
                  (error "Incorrect number of arguments in '#:data (go) handler" (length dest)))]
             ['#:channel 
              (if (equal? (length dest) 2)
                  (let ([ch (cadr dest)])
-                   (handle-return-channel ch val)
-                   (void))
+                   (handle-return-channel ch val))
                  (error "Incorrect number of arguments in '#:channel (go) handler" (length dest)))]
-            [else (error "Invalid type in (go) return handler" type)])))
-    (void))
+            [else (error "Invalid type in (go) return handler" type)]))))
 
   ;Get subset lists that can be handled (lowest common list length between
-  ;return-dests and return-vals) and attempt to handle the return value 
-  (: handle-go-returns-intern (-> Return-List Any Void))
-  (define (handle-go-returns-intern return-dests return-vals)
+  ;return-dests and return-vals) and attempt to handle the return value
+  (define (handle-go-returns-intern [return-dests : Return-List] [return-vals : Any])
     (if (equal? return-dests #f)
         #t
         (let ([vals (if (< (length return-dests) (length return-vals))
@@ -1356,115 +1277,30 @@
                          return-dests)])
           (for ([val vals]
                 [dest dests])
-               (handle-return dest val))))
-    (void))
+               (handle-return dest val)))))
 
-  (handle-go-returns-intern return-dests return-vals)
-  (void))
+  (handle-go-returns-intern return-dests return-vals))
 
 
 
 ;;;----------------------------------------------------------------------------
 ;;; COMPUTATION - thread functions
 ;;;----------------------------------------------------------------------------
-;; Print out the lengths of all datapool environment worker task queues 
-(: print-queue-lens (-> Datapool Void))
-(define (print-queue-lens env)
-  (printf "\n")
-  (for ([i (get-num-dp-threads env)])
-       (printf "len task q ~a: ~a; " 
-               i 
-               (queue-length (get-cp-queue (get-computepool env) i))))
-  (printf "\n\n")
-  (void))
 
-
-;; Wait until total task queue lengths == 0 
-(: wait-len (-> Datapool Boolean True))
-(define (wait-len env [print #t])
-  (: cenv Computepool)
-  (define cenv (get-computepool env))
-
-  (: idxs (Listof Exact-Nonnegative-Integer))
-  (define idxs (list))
-  (for ([i (get-num-dp-threads env)])
-       (set! idxs (append idxs (list i))))
-
-  (: check-in-time Flonum)
-  (define check-in-time (current-inexact-milliseconds))
-
-  (: inner-loop (-> Datapool (Listof Exact-Nonnegative-Integer) Boolean))
-  (define (inner-loop env idxs print)
-    (let ([lens (map (lambda ([idx : Exact-Nonnegative-Integer]) 
-                       (queue-length (get-cp-queue cenv idx))) 
-                     idxs)]
-          [done #t])
-      (for-each 
-        (lambda ([len : Real]) 
-          (when (> len 0) (set! done #f)))
-        lens)
-      (if done
-          #t
-          (let ()
-            (when (> (- (current-inexact-milliseconds) check-in-time) 5000)
-              (set! check-in-time (current-inexact-milliseconds))
-              (when print
-                (print-queue-lens env)
-                (printf "\nWaiting for all tasks to complete...\n")))
-            (sleep 0.01)
-            (inner-loop env idxs print)))))
-  (inner-loop env idxs print)
-  (when print
-    (print-queue-lens env))
-  #t)
-
-
-;; PUBLIC API
-(: close-dp (-> Datapool Boolean Boolean Void))
-(define (close-dp env 
-                  [kill-computepool-threads #f] 
-                  [force-kill-computepool #f])
-  (let ([cenv (get-computepool env)])
-    (if kill-computepool-threads
-        (if force-kill-computepool 
-            ;if force killing threads simply use (kill-thread)
-            (for ([i (get-num-dp-threads env)]) 
-                 (kill-thread (get-cp-thread env i)))
-            (let ()
-              ;if cleanly waiting for threads to die set die flag and wait for 
-              ;tasks to finish
-              (set-cp-die-state cenv #t)
-              (wait-len env #f)
-              (set-cp-die-state cenv #f)))
-        ;if only deleting hash data, set suspend flag and wait for tasks to 
-        ;finish
-        (let () 
-          (set-cp-suspend-state cenv #t)
-          (wait-len env #f)
-          (set-cp-suspend-state cenv #f)))
-
-    ;delete datapool data and message handlers
-    (hash-clear! (get-data-hash env))
-    (hash-clear! (get-dp-message-handler-hash env))
-
-    ;if only suspending worker threads, resume threads with waiting tasks
-    (when (not kill-computepool-threads)
-      (for ([i (get-num-cp-threads)])
-           (when (> (queue-length (get-cp-queue cenv i)) 0)
-             (thread-resume (get-cp-thread cenv i))))))
-  (void))
-
+;; Test flag
+(: sanity-debug Boolean)
+(define sanity-debug #f)
 
 ;; Return thread's queue index if not empty, otherwise gets the index of the 
 ;; fullest queue. 
 (: get-task-q-idx (-> Computepool 
                       Exact-Nonnegative-Integer 
                       Exact-Nonnegative-Integer))
-(define (get-task-q-idx computepool thread-idx)
-  (let ([thread-queue (get-cp-queue computepool thread-idx)])
+(define (get-task-q-idx [computepool : Computepool] [thread-idx : Exact-Nonnegative-Integer])
+  (let ([thread-queue (get-dp-queue computepool thread-idx)])
     (if (equal? (queue-length thread-queue) 0)
-        (let ([highest-idx (get-max-cp-q-idx computepool)])
-          (if (equal? (queue-length (get-cp-queue computepool highest-idx)) 0) 
+        (let ([highest-idx (get-max-dp-q-idx computepool)])
+          (if (equal? (queue-length (get-dp-queue computepool highest-idx)) 0) 
               #f
               highest-idx))
         thread-idx)))
@@ -1473,18 +1309,21 @@
 ;; Return a task from a thread queue to execute
 (define-type Datapool-Task (List Datapool Coroutine Return-List))
 (: get-task (-> Computepool Exact-Nonnegative-Integer Datapool-Task))
-(define (get-task computepool thread-idx)
+(define (get-task [computepool : Computepool] [thread-idx : Exact-Nonnegative-Integer])
   (let ([q-idx (get-task-q-idx computepool thread-idx)])
     (if (equal? q-idx #f)
         #f 
         (let ()
-          (semaphore-wait (get-cp-queue-sem computepool q-idx))
-          (let ([ret (if (queue-empty? (get-cp-queue computepool q-idx))
-                         #f
-                         (dequeue! (get-cp-queue computepool q-idx)))])
-            (semaphore-post (get-cp-queue-sem computepool q-idx))
+          (semaphore-wait (get-dp-queue-sem computepool q-idx))
+          (let ([ret 
+                  (if (queue-empty? (get-dp-queue computepool q-idx))
+                      #f
+                      (dequeue! (get-dp-queue computepool q-idx)))])
+            (semaphore-post (get-dp-queue-sem computepool q-idx))
             ret)))))
 
+(: *DP-THREAD-CLEAN-DIE* Boolean)
+(define *DP-THREAD-CLEAN-DIE* #f)
 
 ;; Evaluate given task, limits cpu starvation by limiting continuous 
 ;; evaluations in coroutines. If provided task is *not* a coroutine and/or 
@@ -1493,8 +1332,10 @@
 (: dp-thread-exec-task (-> Computepool 
                            Exact-Nonnegative-Integer 
                            Datapool-Task
-                           Void))
-(define (dp-thread-exec-task computepool thread-idx task)
+                           Boolean))
+(define (dp-thread-exec-task [computepool : Computepool] 
+                             [thread-idx : Exact-Nonnegative-Integer]
+                             [task : Datapool-Task])
   (let ([co-env (car task)]
         [co (cadr task)]
         [return-dests (caddr task)])
@@ -1509,26 +1350,10 @@
             #f)))))
 
 
-;; Restart suspended threads waiting to add more tasks to the computepool 
-(: restart-waiting-go-threads (-> Computepool Void))
-(define (restart-waiting-go-threads computepool)
-  ;; Attempt to restart threads waiting to enqueue a (go) task
-  (when (and (> (queue-length (get-waiting-threads-queue computepool)) 0)
-             (< (queue-length (get-cp-queue computepool (get-min-cp-q-idx computepool))) 
-                *MAX-CP-QUEUE-SIZE*))
-    (semaphore-wait (get-waiting-threads-queue-sem computepool))
-    (let ([thread (dequeue! (get-waiting-threads-queue computepool))])
-      (when (thread? thread)
-        (when (not (thread-dead? thread)) ;throw out any dead threads
-          (when (not (thread-running? thread))
-            (thread-resume thread))))) ;resume thread waiting to invoke (go)
-    (semaphore-post (get-waiting-threads-queue-sem computepool)))
-  (void))
-
-
 ;; Eternal thread tail recursion of executing tasks 
-(: dp-thread (-> Computepool Exact-Nonnegative-Integer True))
-(define (dp-thread computepool thread-idx) 
+(: dp-thread (-> Computepool Exact-Nonnegative-Integer #t))
+(define (dp-thread [computepool : Computepool] 
+                   [thread-idx : Exact-Nonnegative-Integer]) 
   (with-handlers 
     ([exn:fail? 
        (lambda (e)
@@ -1537,56 +1362,101 @@
            "dp-thread got error, current task thrown out: ~a\n"
            e)
          (dp-thread computepool thread-idx))])
-
-    (restart-waiting-go-threads computepool)
-
-    ;get and execute a task
     (let ([task (get-task computepool thread-idx)])
       (if (or (not task) (equal? (car task) #f))
           (thread-suspend (current-thread))
           (let ()
-            (dp-thread-exec-task
+            (dp-thread-exec-task ;execute the task we get
               computepool 
               thread-idx 
               task)))))
 
-  ;handle if computepool is in a die or suspend state
-  (if (get-cp-die-state computepool)
-      (void)
-      (if (get-cp-suspend-state computepool)
-          (thread-suspend (current-thread))
-          (dp-thread computepool thread-idx))))
+  ;; Attempt to restart threads waiting to enqueue a (go) task
+  (when (and (> (queue-length (get-waiting-threads-queue computepool)) 0)
+             (< (queue-length (get-dp-queue computepool (get-min-dp-q-idx computepool))) 
+                *MAX-DP-QUEUE-SIZE*))
+    (semaphore-wait (get-waiting-threads-queue-sem computepool))
+    (let ([thread (dequeue! (get-waiting-threads-queue computepool))])
+      (when (not (thread-dead? thread)) ;throw out any dead threads
+        (if (not (thread-running? thread))
+            (thread-resume thread) ;resume thread waiting to invoke (go)
+            (enqueue! (get-waiting-threads-queue computepool))))) ;thread not ready to resume
+    (semaphore-post (get-waiting-threads-queue-sem computepool)))
+  (if *DP-THREAD-CLEAN-DIE*
+      #t
+      (dp-thread computepool thread-idx)))
 
 
-;; Thread startup coroutine 
-(: dp-thread-start (-> Computepool Void))
-(define (dp-thread-start computepool)
+;; Thread startup coroutine
+(define (dp-thread-start [computepool : Computepool])
   (let ([id (current-thread)])
     (: thread-num Exact-Nonnegative-Integer)
     (define thread-num 0)
-    (for ([i (get-num-cp-threads computepool)])
-         (when (equal? (get-cp-thread computepool i) id) 
+    (for ([i (get-num-dp-threads-intern computepool)])
+         (when (equal? (get-dp-thread computepool i) id) 
            (set! thread-num i)))
-    (dp-thread computepool thread-num))
-  (void))
+    (dp-thread computepool thread-num)))
 
 
 
 ;;;---------------------------------------------------------------------------- 
 ;;; TESTING - 3 unit tests
 ;;;---------------------------------------------------------------------------- 
+;; Print out the lengths of all datapool environment worker task queues
+(define (print-queue-lens [env : Datapool])
+  (printf "\n")
+  (for ([i (get-num-dp-threads env)])
+       (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue (get-computepool env) i))))
+  (printf "\n\n"))
+
+;; Wait until total task queue lengths == 0
+(define (wait-len [env : Datapool])
+  (: cenv Computepool)
+  (define cenv (get-computepool env))
+
+  (: idxs (Listof Exact-Nonnegative-Integer))
+  (define idxs (list))
+  (for ([i (get-num-dp-threads env)])
+       (set! idxs (append idxs (list i))))
+
+  (: check-in-time Flonum)
+  (define check-in-time (current-inexact-milliseconds))
+
+  (: inner-loop (-> Datapool (Listof Exact-Nonnegative-Integer) Boolean))
+  (define (inner-loop [env : Datapool] 
+                      [idxs : (Listof Exact-Nonnegative-Integer)])
+    (let ([lens (map (lambda ([idx : Exact-Nonnegative-Integer]) 
+                       (queue-length (get-dp-queue cenv idx))) 
+                     idxs)]
+          [done #t])
+      (for-each 
+        (lambda ([len : Real]) 
+          (when (> len 0) (set! done #f)))
+        lens)
+      (if done
+          #t
+          (let ()
+            (when (> (- (current-inexact-milliseconds) check-in-time) 5000)
+              (set! check-in-time (current-inexact-milliseconds))
+              (print-queue-lens env)
+              ;(printf " ~a; " (queue-length (get-dp-queue env i))))
+              ;(set! sanity-debug #t)
+              (printf "\nWaiting for all tasks to complete...\n"))
+            (sleep 0.01)
+            (inner-loop env idxs)))))
+  (inner-loop env idxs)
+  (print-queue-lens env)
+  (set! sanity-debug #f))
+
 (: pr Boolean)
 (define pr #t)
 
 (: wait Boolean)
 (define wait #f)
 
-(define-namespace-anchor a) 
-
-(: run-3-ut (-> Boolean Boolean Void))
-(define (run-3-ut [print-results #t] [wait-on-fail #f]) 
+(define-namespace-anchor a)
+(define (run-3-ut [print-results : Boolean #t] [wait-on-fail : Boolean #f]) 
   (set! pr print-results)
   (set! wait wait-on-fail)
   (parameterize ([current-namespace (namespace-anchor->namespace a)])
-    (load "3-ut.rkt"))
-  (void))
+    (load "3-ut.rkt")))
