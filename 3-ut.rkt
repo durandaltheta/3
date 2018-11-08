@@ -1834,7 +1834,8 @@
                  (list '#:channel (get-data-field env obj-key 'val))))))
       (wait-len env)
       (let ([time (- (current-inexact-milliseconds) start-time)])
-        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared hashed object's field: ~a\n"  x 1 num-threads time))
+        (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared hashed object's field: ~a\n"  x 1 num-threads time)
+        (printf "go invocations per second: ~a\n\n" (iterations-per-second time x)))
 
       (test-true? 
         "val stored in shared data object" 
