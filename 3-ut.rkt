@@ -165,8 +165,8 @@
   (test-section "datapool data constructor, getter, and destructor functions")
   ;Make a datapool
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)]) 
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)]) 
 
     ;;------------------------------------- 
     ;; check num counts are correct
@@ -358,8 +358,8 @@
 (define (test-datapool-getters-setters)
   (test-section "datapool getters & setters")
   (let* ([num-threads 2]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
 
     ;-------------------------------------- 
     ;verify datapool info is correct
@@ -485,8 +485,8 @@
 (define (test-task-queues)
   (test-section "task queue getters & setters")
   (let* ([num-threads 2]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
 
     ;;Wait for worker threads to put themselves to sleep
     (sleep 0.1)
@@ -541,8 +541,8 @@
 (define (test-datapool-threads)
   (test-section "datapool thread internal functions")
   (let* ([num-threads 2]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)]) 
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)]) 
     (sleep 0.1)
     (define-coroutine (test-task-co)
                       3)
@@ -583,8 +583,8 @@
 (define (test-go)
   (test-section "go")
   (let* ([num-threads 2]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
 
     (let 
       ([inp-vals (list 'test 'test2 #f "teststring")]
@@ -642,8 +642,8 @@
 (define (test-data-hash)
   (test-section "manage data objects")
   (let* ([num-threads 2]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)]
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)]
          [test-key 1337]
          [test-key2 64]) 
 
@@ -705,12 +705,12 @@
 (define (test-message-handlers)
   (test-section "manage message handlers")
   (let* ([num-threads 2]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let*
       ([test-type 'test-type]
        [test-content "hello world"]
-       [test-msg (message test-type test-content)])
+       [test-msg (make-message test-type test-content)])
       (test-equal? "can get message's type" 
                    (message-type test-msg) 
                    test-type 
@@ -801,7 +801,7 @@
 
 
 ;;**************************************
-;;TEST define-message-handler 
+;;TEST register-message-handler 
 ;;     send-message-co
 ;;     send-message 
 ;;     delete-data!
@@ -809,8 +809,8 @@
 (define (test-message-handlers-2)
   (test-section "manage message handlers 2")
   (let* ([num-threads 2]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
 
     (define test-class%
       (class object% 
@@ -869,7 +869,7 @@
                          pr 
                          wait))
 
-          (define-message-handler 
+          (register-message-handler 
             env 
             catch-msg 
             test-msg-type-2
@@ -877,7 +877,7 @@
             #f 
             #f)
 
-          (define-message-handler 
+          (register-message-handler 
             env 
             msg-handler 
             test-msg-type 
@@ -895,7 +895,7 @@
 
           (send-message 
             env 
-            (message test-msg-type (list env ch test-val test-key) test-source-key))
+            (make-message test-msg-type (list env ch test-val test-key) test-source-key))
 
           (sleep 0.1)
 
@@ -943,7 +943,7 @@
             (msg-handler-2 msg input-data)
             (list (car input-data) (cadr input-data) (caddr input-data)))
 
-          (define-message-handler 
+          (register-message-handler 
             env 
             msg-handler-2
             test-msg-type 
@@ -957,7 +957,7 @@
               (list '#:channel out-ch)
               (list '#:channel out-ch)))
 
-          (send-message env (message test-msg-type #f))
+          (send-message env (make-message test-msg-type #f))
 
           (sleep 0.1)
 
@@ -1020,8 +1020,8 @@
 
   (printf "1. delete-data! data-key where message handler has source set to data-key removes handler from handler hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1030,7 +1030,7 @@
         pr
         wait)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               test-data-key 
@@ -1056,8 +1056,8 @@
 
   (printf "2. delete-data! data-key where message handlers have source set to data-key removes handlers from handler hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1067,7 +1067,7 @@
         wait)
 
       (for ([i 3])
-           (define-message-handler env 
+           (register-message-handler env 
                                    test-handler 
                                    test-message-type
                                    test-data-key 
@@ -1093,8 +1093,8 @@
 
   (printf "3. delete-data! data-key where message handler does *not* have source set to data-key remains in handler hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1103,7 +1103,7 @@
         pr
         wait)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               (+ test-data-key 1)
@@ -1129,8 +1129,8 @@
 
   (printf "4. delete-data! data-key where message handlers do *not* have source set to data-key remain in handler hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1140,7 +1140,7 @@
         wait)
 
       (for ([i 3])
-           (define-message-handler env 
+           (register-message-handler env 
                                    test-handler 
                                    test-message-type
                                    (+ test-data-key 1)
@@ -1166,8 +1166,8 @@
 
   (printf "5. delete-data! data-key where 1 handler has source set to data-key and another handler does not, only deletes the first handler\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1176,14 +1176,14 @@
         pr
         wait)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               test-data-key
                               #f
                               #f)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               (+ test-data-key 1)
@@ -1232,8 +1232,8 @@
 
   (printf "1. delete-data! data-key where message handler has input-data set to data-key deletes handler from hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1242,7 +1242,7 @@
         pr
         wait)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               #f
@@ -1268,8 +1268,8 @@
 
   (printf "2. delete-data! data-key where message handlers have input-data set to data-key deletes handlers from hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1279,7 +1279,7 @@
         wait)
 
       (for ([i 4])
-           (define-message-handler env 
+           (register-message-handler env 
                                    test-handler 
                                    test-message-type
                                    #f
@@ -1305,8 +1305,8 @@
 
   (printf "3. delete-data! data-key where message handler does not have input-data to data-key does *not* delete handler from hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1315,7 +1315,7 @@
         pr
         wait)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               #f
@@ -1341,8 +1341,8 @@
 
   (printf "4. delete-data! data-key where message handlers do not have input-data set to data-key does *not* delete handlers from hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1352,7 +1352,7 @@
         wait)
 
       (for ([i 4])
-           (define-message-handler env 
+           (register-message-handler env 
                                    test-handler 
                                    test-message-type
                                    #f
@@ -1378,8 +1378,8 @@
 
   (printf "5. delete-data! data-key where 1 handler has input-data set to data-key and another handler does not, only deletes the first handler\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1388,14 +1388,14 @@
         pr
         wait)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               #f
                               (list (list '#:data test-data-key #f))
                               #f)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               #f
@@ -1444,8 +1444,8 @@
 
   (printf "1. delete data-key where message handler has return-destinations set to data-key deletes handler from hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1454,7 +1454,7 @@
         pr
         wait)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               #f
@@ -1480,8 +1480,8 @@
 
   (printf "2. delete data-key where message handlers have return-destinations set to data-key deletes handlers from hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1491,7 +1491,7 @@
         wait)
 
       (for ([i 4])
-           (define-message-handler env 
+           (register-message-handler env 
                                    test-handler 
                                    test-message-type
                                    #f
@@ -1517,8 +1517,8 @@
 
   (printf "3. delete data-key where message handler does not have return-destinations to data-key does *not* delete handler from hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1527,7 +1527,7 @@
         pr
         wait)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               #f
@@ -1553,8 +1553,8 @@
 
   (printf "4. delete data-key where message handler does not have return-destinations to data-key does *not* delete handler from hash\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1564,7 +1564,7 @@
         wait)
 
       (for ([i 4])
-           (define-message-handler env 
+           (register-message-handler env 
                                    test-handler 
                                    test-message-type
                                    #f
@@ -1590,8 +1590,8 @@
 
   (printf "5. delete data-key where 1 handler has return-destinations set to data-key and another handler does not, only deletes the first handler\n")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
     (let ([test-data-key (register-data! env test-object)])
       (test-equal? 
         "message handler size" 
@@ -1600,14 +1600,14 @@
         pr
         wait)
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               #f
                               #f
                               (list (list '#:data test-data-key #f)))
 
-      (define-message-handler env 
+      (register-message-handler env 
                               test-handler 
                               test-message-type
                               #f
@@ -1639,8 +1639,8 @@
 (define (test-go-stress)
   (test-section "go stress test: basic (go) invocations")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
 
     (define-coroutine
       (test-routine inp-x)
@@ -1678,8 +1678,8 @@
 (define (test-go-stress-2)
   (test-section "go stress test 2: timing comparisons for addition")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)])
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)])
 
 
     ;return immediately
@@ -1786,8 +1786,8 @@
 (define (test-go-stress-3)
   (test-section "go stress test 3: collating results")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)]
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)]
          [x 100000]
          [ch (channel)])
 
@@ -1856,9 +1856,9 @@
 (define (test-multiple-datapool)
   (test-section "test multiple datapools")
   (let* ([num-threads 8]
-         [cenv (computepool num-threads)]
-         [env (datapool cenv)]
-         [env2 (datapool cenv)]
+         [cenv (make-computepool num-threads)]
+         [env (make-datapool cenv)]
+         [env2 (make-datapool cenv)]
          [ch (channel)])
 
     (define test-val 17)
