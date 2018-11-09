@@ -601,7 +601,7 @@
       (go env (test-task-co2 ch inp-vals))
 
       (sleep 0.1)
-      (wait-len env)
+      (wait-len env #t)
       (for ([i num-threads])
            (printf "\n--- tests for thread ~a ---\n" i)
            (test-true? "Check if dp thread is not dead" (not (thread-dead? (get-dp-thread cenv 1))) pr wait)
@@ -1659,7 +1659,7 @@
              (printf "\tenqueued (go) i: ~a\n" i))
            (go env (test-routine v)))
 
-      (wait-len env)
+      (wait-len env #t)
       (for ([i num-threads])
            (let ([o (open-output-string)])
              (fprintf o "length q[~a]" i)
@@ -1725,7 +1725,7 @@
       (for ([i x])
            (go env (go-return i)))
 
-      (wait-len env)
+      (wait-len env #t)
       (let ([time (- (current-inexact-milliseconds) start-time)])
         (printf "Benchmark time (milli) for ~a immediately returning (go) operations: ~a\n" x time)
         (printf "(go) operations per second: ~a\n\n" (iterations-per-second time x))))
@@ -1743,7 +1743,7 @@
         (for ([u num-threads])
              (go env (eval-x-times-yield env x)))
 
-        (wait-len env)
+        (wait-len env #t)
         (let ([time (- (current-inexact-milliseconds) start-time)])
           (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads with (yield) calls every 10000 iterations: ~a\n"  num-threads x num-threads time)
           (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
@@ -1757,7 +1757,7 @@
         (for ([i num-threads])
              (go env (eval-x-times env x)))
 
-        (wait-len env)
+        (wait-len env #t)
         (let ([time (- (current-inexact-milliseconds) start-time)])
           (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads in coroutine without (yield) calls: ~a\n"  num-threads x num-threads time)
           (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
@@ -1772,7 +1772,7 @@
         (for ([i num-threads])
              (go env (eval-x-times-parallel env x)))
 
-        (wait-len env)
+        (wait-len env #t)
         (let ([time (- (current-inexact-milliseconds) start-time)])
           (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads and ~a parallel processed futures: ~a\n"  num-threads x num-threads 8 time)
           (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
@@ -1803,7 +1803,7 @@
              (when (equal? 0 (remainder i 10000))
                (printf "enqueued (go)[~a]\n" i))
              (go env (collate-coroutine ch i))))
-      (wait-len env)
+      (wait-len env #t)
       (let ([time (- (current-inexact-milliseconds) start-time)])
         (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared channel: ~a\n"  x 1 num-threads time)
         (printf "go invocations per second: ~a\n\n" (iterations-per-second time x))))
@@ -1832,7 +1832,7 @@
                (ret-val-coroutine i) 
                (list 
                  (list '#:channel (get-data-field env obj-key 'val))))))
-      (wait-len env)
+      (wait-len env #t)
       (let ([time (- (current-inexact-milliseconds) start-time)])
         (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads collating results in a shared hashed object's field: ~a\n"  x 1 num-threads time)
         (printf "go invocations per second: ~a\n\n" (iterations-per-second time x)))
@@ -1883,7 +1883,7 @@
           (output-to-other-datapool test-val) 
           (list (list '#:datapool env2 test-key 'test-field)))
 
-      (wait-len env)
+      (wait-len env #t)
 
       (test-equal? "successfully set env2 field from env" 
                    (get-data-field env2 test-key 'test-field) 
@@ -1894,7 +1894,7 @@
           (output-to-other-datapool test-val-3) 
           (list (list '#:datapool env2 test-key 'test-field)))
 
-      (wait-len env)
+      (wait-len env #t)
 
       (test-equal? "successfully set env2 field from env" 
                    (get-data-field env2 test-key 'test-field) 
@@ -1906,7 +1906,7 @@
           (output-to-other-datapool test-val-4) 
           (list (list '#:datapool env2 test-key #f)))
 
-      (wait-len env)
+      (wait-len env #t)
 
       (test-equal? "successfully set env2 data from env" 
                    (get-data env2 test-key) 

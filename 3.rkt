@@ -433,7 +433,9 @@
 
 ;; PUBLIC API
 ;;kill all threads and processes in a datapool
-(define (close-dp env)
+(define (close-dp env [force-close #f])
+  (when (not force-close)
+    (wait-len env))
   ;kill threads
   (for ([i (get-num-dp-threads env)])
        (kill-thread (vector-ref 
@@ -444,7 +446,8 @@
                             0) 
                           1) 
                         i) 
-                      0))))
+                      0)))
+  (void))
 
 
 
@@ -1229,7 +1232,7 @@
   (printf "\n\n"))
 
 ;; Wait until total task queue lengths == 0
-(define (wait-len env [print #t])
+(define (wait-len env [print #f])
   (define cenv (get-computepool env))
   (define idxs (list))
   (for ([i (get-num-dp-threads env)])
