@@ -61,7 +61,7 @@
   test-equal?
   test-fail
   test-pass
-  wait-len ;wait for task queues to be empty
+  wait-dp ;wait for task queues to be empty
   print-test-report
   run-3-ut)
 
@@ -435,7 +435,7 @@
 ;;kill all threads and processes in a datapool
 (define (close-dp env [force-close #f])
   (when (not force-close)
-    (wait-len env))
+    (wait-dp env))
   ;kill threads
   (for ([i (get-num-dp-threads env)])
        (kill-thread (vector-ref 
@@ -1232,7 +1232,7 @@
   (printf "\n\n"))
 
 ;; Wait until total task queue lengths == 0
-(define (wait-len env [print #f])
+(define (wait-dp env [print #f])
   (define cenv (get-computepool env))
   (define idxs (list))
   (for ([i (get-num-dp-threads env)])
