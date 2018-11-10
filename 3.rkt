@@ -57,6 +57,7 @@
 
   ;;;TESTING
   test-section
+  reset-test-results
   test-true?
   test-equal?
   test-fail
@@ -140,7 +141,8 @@
   (set! *passed-tests* (list))
   (set! *num-fails* 0)
   (set! *failed-tests* (list))
-  (set! *cur-test-section* ""))
+  (set! *cur-test-section* "")
+  (set! *tests-started* #f))
 
 (define (get-test-num)
   (let ([num *test-number*])
@@ -1056,19 +1058,11 @@
 
   ;Handle any alternative datapool returns
   (define (handle-return-datapool return-env key field val)
-    (printf "handle-return-datapool 1 key: ~a; field: ~a\n" key field)
     (if field 
-        (let ()
-          (printf "handle-return-datapool 2\n")
           ;set object field at data key
           (set-data-field! return-env key field val)
-          )
-        (let ()
-          (printf "handle-return-datapool 3 val: ~a\n" val)
           ;replace data at key
-          (define set-data-ret (set-data! return-env key val))
-          (printf "handle-return-datapool 4 set-data-ret: ~a; get-data: ~a\n" set-data-ret (get-data return-env key))
-          )))
+          (set-data! return-env key val)))
 
   ;Handle any channel returns
   (define (handle-return-channel ch val)

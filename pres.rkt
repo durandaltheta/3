@@ -15,7 +15,7 @@
          testing-ex
          message-ex
          yield-ex 
-         interacting-ex
+         interaction-ex
          non-trivial-computation-ex
          redirect-go-ex
          redirect-handler-ex)
@@ -128,15 +128,18 @@
     (return-inp inp)
     inp)
 
+  ;reset global test values
+  (reset-test-results)
+
   ;start a new test section, automatically call (print-test-report) if this 
   ;is not the first test-section invoked
   (test-section "example testing")
-  
-  (test-true? "Is the output value true?" (return-inp #t))
-  (test-true? "What about now?" (return-inp #f))
-  (test-equal? "Can we compare successfully?" (return-inp 3) 3)
-  (test-equal? "What about now?" (return-inp 3) 4)
- 
+
+  (test-true? "Is the output value true?" ((return-inp #t)))
+  (test-true? "What about now?" ((return-inp #f)))
+  (test-equal? "Can we compare successfully?" ((return-inp 3)) 3)
+  (test-equal? "What about now?" ((return-inp 3)) 4)
+
   ;print the aggregate results of the test
   (print-test-report))
 
@@ -147,28 +150,34 @@
 ;There's nothing stopping you from accessing external state if that's what is
 ;required for a given task. Here we pass information between 2 executing (go)
 ;tasks
-(define (interacting-ex)
+(define (interaction-ex)
+
+  ;define coroutine which passes a 'ball' back and forth through channels
   (define-coroutine
     (pass-ball who in out pass-limit)
     (define (intern-recursion who in out pass-limit)
       ;block till we get the ball
       (let ([ball (ch-get in)])
-        (print "~a has the ball\n" who)
-        (if (equal? pass-limit 0)
-            (ch-put out ball)
+        (printf "~a catches the ball\n" who)
+        (when (not (equal? pass-limit 0))
             (let ([new-limit (- pass-limit 1)])
               (ch-put out ball)
-              (intern-recursion in out new-limit)))))
+              (printf "~a throws the ball\n\n" who)
+              (intern-recursion who in out new-limit)))))
 
     (intern-recursion who in out pass-limit))
+
+
   (let ([dp (make-datapool (make-computepool 2))]
         [ch1 (channel)]
         [ch2 (channel)]
-        [pass-limit 10])
+        [pass-limit 3])
+    (ch-put ch2 'ball)
     (go dp (pass-ball "Son" ch1 ch2 pass-limit))
     (go dp (pass-ball "Dad" ch2 ch1 pass-limit))
 
-    (wait-dp dp)))
+    (wait-dp dp)
+    (close-dp dp)))
 
 
 
@@ -241,7 +250,7 @@
   ;it to a string value
   (define test-class% (class object%
                              (super-new) ;required 
-                             (field [test-field "ex text"])))
+                             (field [test-field "example text"])))
 
   ;actually create the object
   (define test-object (make-object test-class%))
@@ -257,22 +266,23 @@
 
 
   ;create datapools and register our various data
-  (let ([dp (make-datapool (make-computepool 1))]
-        [dp2 (make-datapool (make-computepool 1))]
-        ;register a variable to a datapool
-        [test-data-key (register-data! dp test-data)]
-        ;register an object to a datapool
-        [test-object-key (register-data! dp test-object)]
-        ;register a variable to *another* datapool
-        [test-data-2-key (register-data! dp2 test-data-2)])
-    (print "value of test-data: ~a\n" (get-data dp test-data-key))
-    (print "value of test-object's test-field: ~a\n" 
+  (let* ([dp (make-datapool (make-computepool 1))]
+         [dp2 (make-datapool (make-computepool 1))]
+         ;register a variable to a datapool
+         [test-data-key (register-data! dp test-data)]
+         ;register an object to a datapool
+         [test-object-key (register-data! dp test-object)]
+         ;register a variable to *another* datapool
+         [test-data-2-key (register-data! dp2 test-data-2)])
+    (printf "value of test-data: ~a\n" (get-data dp test-data-key))
+    (printf "value of test-object's test-field: ~a\n" 
            (get-data-field dp test-object-key 'test-field))
     ;get channel content without blocking, returns #f if empty
-    (print "value of channel: ~a\n" (get-ch test-channel #f))
-    (print "value of test-data-2: ~a\n" (get-data dp2 test-data-2-key))
+    (printf "value of channel: ~a\n" (ch-get test-channel #f))
+    (printf "value of test-data-2: ~a\n" (get-data dp2 test-data-2-key))
 
 
+    (printf "\nRun coroutine where redirected results will modify said data\n\n")
     ;run coroutine with (go) and redirect output to various places
     (go dp (output-new-test-data) (list (list '#:data test-data-key #f)
                                         (list '#:data test-object-key 'test-field)
@@ -281,11 +291,11 @@
 
     (wait-dp dp)
 
-    (print "value of test-data: ~a\n" (get-data dp test-data-key))
-    (print "value of test-object's test-field: ~a\n" 
+    (printf "value of test-data: ~a\n" (get-data dp test-data-key))
+    (printf "value of test-object's test-field: ~a\n" 
            (get-data-field dp test-object-key 'test-field))
-    (print "value of channel: ~a\n" (get-ch test-channel #f))
-    (print "value of test-data-2: ~a\n" (get-data dp2 test-data-2-key))
+    (printf "value of channel: ~a\n" (ch-get test-channel #f))
+    (printf "value of test-data-2: ~a\n" (get-data dp2 test-data-2-key))
 
     (close-dp dp)
     (close-dp dp2)))
@@ -304,15 +314,15 @@
                                (super-new)
                                ;create 2 new fields that can will be initialized
                                ;during object creation
-                               (init a b)))
+                               (init-field a b)))
 
     ;Create an object, where input 4 becomes a and 7 becomes b
     (define test-object (make-object test-class% 4 7))  
 
-    (print "test object's initial 'a' field: ~a\n" 
-           (dynamic-get-field 'a test-object))
-    (print "test object's initial 'b' field: ~a\n" 
-           (dynamic-get-field 'b test-object))
+    (printf "test object's initial 'a' field: ~a\n" 
+            (dynamic-get-field 'a test-object))
+    (printf "test object's initial 'b' field: ~a\n\n" 
+            (dynamic-get-field 'b test-object))
 
     (let* ([obj-key (register-data! dp test-object)]
            [msg-type 'some-type]
@@ -324,7 +334,7 @@
       ;input values
       (define-coroutine
         (output-modified msg input)
-        (print "message content: ~a\n" (message-content msg))
+        (printf "message content: ~a\n" (message-content msg))
         (let* ([a (car input)]
                [b (cadr input)]
                [new-a (+ a 2)]
@@ -351,8 +361,8 @@
       (send-message dp msg)
 
       ;wait for the handler to finish processing
-      (wait-dp)
+      (wait-dp dp)
       ;print the modified field results
-      (print "test object's 'a' field: ~a\n" (get-data-field obj-key 'a))
-      (print "test object's 'b' field: ~a\n" (get-data-field obj-key 'b))
+      (printf "\ntest object's new 'a' field: ~a\n" (get-data-field dp obj-key 'a))
+      (printf "test object's new 'b' field: ~a\n" (get-data-field dp obj-key 'b))
       (close-dp dp))))
