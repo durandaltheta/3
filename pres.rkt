@@ -12,13 +12,13 @@
 ;it makes the following functions available
 (provide coroutine-ex
          go-ex 
-         testing-ex
          message-ex
          yield-ex 
+		 testing-ex
          interaction-ex
-         non-trivial-computation-ex
          redirect-go-ex
-         redirect-handler-ex)
+         redirect-handler-ex
+         non-trivial-computation-ex)
 
 
 ;------------------------------------------------------------------------------
@@ -190,7 +190,7 @@
 (define (non-trivial-computation-ex nth)
 
   ;defining a coroutine to calculate the cpu intensive task of calculating the 
-  ;nth prime, for use in later exs
+  ;nth prime
   (define-coroutine 
     (find-nth-prime-co n output-channel)
 
@@ -246,59 +246,26 @@
   ;setup our data 
   (define test-data 3)
 
-  ;create a class with a field named 'test-field' and automatically initialize 
-  ;it to a string value
-  (define test-class% (class object%
-                             (super-new) ;required 
-                             (field [test-field "example text"])))
-
-  ;actually create the object
-  (define test-object (make-object test-class%))
-
-  ;setup some more data
-  (define test-channel (channel))
-  (define test-data-2 'arbitrary-value)
-
   ;define a coroutine that outputs some data as a list
   (define-coroutine
     (output-new-test-data)
-    (list 4 "new text" 0.5 'another-value))
+    5)
 
 
   ;create datapools and register our various data
   (let* ([dp (make-datapool (make-computepool 1))]
-         [dp2 (make-datapool (make-computepool 1))]
          ;register a variable to a datapool
-         [test-data-key (register-data! dp test-data)]
-         ;register an object to a datapool
-         [test-object-key (register-data! dp test-object)]
-         ;register a variable to *another* datapool
-         [test-data-2-key (register-data! dp2 test-data-2)])
+         [test-data-key (register-data! dp test-data)])
     (printf "value of test-data: ~a\n" (get-data dp test-data-key))
-    (printf "value of test-object's test-field: ~a\n" 
-           (get-data-field dp test-object-key 'test-field))
-    ;get channel content without blocking, returns #f if empty
-    (printf "value of channel: ~a\n" (ch-get test-channel #f))
-    (printf "value of test-data-2: ~a\n" (get-data dp2 test-data-2-key))
-
 
     (printf "\nRun coroutine where redirected results will modify said data\n\n")
     ;run coroutine with (go) and redirect output to various places
-    (go dp (output-new-test-data) (list (list '#:data test-data-key #f)
-                                        (list '#:data test-object-key 'test-field)
-                                        (list '#:channel test-channel)
-                                        (list '#:datapool dp2 test-data-2-key #f)))
+    (go dp (output-new-test-data) (list (list '#:data test-data-key #f)))
 
     (wait-dp dp)
-
     (printf "value of test-data: ~a\n" (get-data dp test-data-key))
-    (printf "value of test-object's test-field: ~a\n" 
-           (get-data-field dp test-object-key 'test-field))
-    (printf "value of channel: ~a\n" (ch-get test-channel #f))
-    (printf "value of test-data-2: ~a\n" (get-data dp2 test-data-2-key))
 
-    (close-dp dp)
-    (close-dp dp2)))
+    (close-dp dp)))
 
 
 
@@ -309,53 +276,35 @@
 (define (redirect-handler-ex)
   (let ([dp (make-datapool (make-computepool 2))])
 
-    ;define a new object class
-    (define test-class% (class object% 
-                               (super-new)
-                               ;create 2 new fields that can will be initialized
-                               ;during object creation
-                               (init-field a b)))
+    (define test-data 4)
 
-    ;Create an object, where input 4 becomes a and 7 becomes b
-    (define test-object (make-object test-class% 4 7))  
+    (printf "test data initial value: ~a\n\n" test-data)
 
-    (printf "test object's initial 'a' field: ~a\n" 
-            (dynamic-get-field 'a test-object))
-    (printf "test object's initial 'b' field: ~a\n\n" 
-            (dynamic-get-field 'b test-object))
-
-    (let* ([obj-key (register-data! dp test-object)]
+    (let* ([data-key (register-data! dp test-data)]
            [msg-type 'some-type]
            ;make a new message with specified type, content payload, and source 
            ;key
-           [msg (make-message msg-type "arbitrary content!" obj-key)])
+           [msg (make-message msg-type "arbitrary content!")])
 
-      ;a coroutine that prints message content and  returns a list of modified 
-      ;input values
+      ;a coroutine that prints message content and a modified input value
       (define-coroutine
         (output-modified msg input)
         (printf "message content: ~a\n" (message-content msg))
         (let* ([a (car input)]
-               [b (cadr input)]
-               [new-a (+ a 2)]
-               [new-b (* b 3)])
-          (list new-a new-b)))
+               [new-a (+ a 2)])
+          new-a))
 
       ;register a new message handler
       (register-message-handler 
         dp 
         output-modified 
         msg-type
-        ;only invoke if provided message source key matches. This is an 
-        ;optional method of specifying message origin
-        obj-key         
-        ;specify input values from handler datapool to get when calling 
+        #f
+        ;specify input values from handler's datapool to get when calling 
         ;output-modified
-        (list (list obj-key 'a)
-              (list obj-key 'b))
+        (list (list data-key #f))
         ;specify return destinatinos 
-        (list (list '#:data obj-key 'a)
-              (list '#:data obj-key 'b)))
+        (list (list '#:data data-key #f)))
 
       ;send a message to our handler
       (send-message dp msg)
@@ -363,6 +312,5 @@
       ;wait for the handler to finish processing
       (wait-dp dp)
       ;print the modified field results
-      (printf "\ntest object's new 'a' field: ~a\n" (get-data-field dp obj-key 'a))
-      (printf "test object's new 'b' field: ~a\n" (get-data-field dp obj-key 'b))
+      (printf "\ntest data's new value: ~a\n" (get-data dp data-key))
       (close-dp dp))))
