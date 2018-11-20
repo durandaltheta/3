@@ -1059,10 +1059,10 @@
   ;Handle any alternative datapool returns
   (define (handle-return-datapool return-env key field val)
     (if field 
-          ;set object field at data key
-          (set-data-field! return-env key field val)
-          ;replace data at key
-          (set-data! return-env key val)))
+        ;set object field at data key
+        (set-data-field! return-env key field val)
+        ;replace data at key
+        (set-data! return-env key val)))
 
   ;Handle any channel returns
   (define (handle-return-channel ch val)
@@ -1121,9 +1121,6 @@
 ;;;----------------------------------------------------------------------------
 ;;; COMPUTATION - thread functions
 ;;;----------------------------------------------------------------------------
-
-;; Test flag
-(define sanity-debug #f)
 
 ;; Return thread's queue index if not empty, otherwise gets the index of the 
 ;; fullest queue.
@@ -1222,38 +1219,62 @@
 (define (print-queue-lens env)
   (printf "\n")
   (for ([i (get-num-dp-threads env)])
-       (printf "len task q ~a: ~a; " i (queue-length (get-dp-queue (get-computepool env) i))))
-  (printf "\n\n"))
+       (printf "len task q ~a: ~a\n" i (queue-length 
+                                         (get-dp-queue 
+                                           (get-computepool env) 
+                                           i))))
+  (printf "\n"))
 
-;; Wait until total task queue lengths == 0
+
+(define (print-thread-states env)
+  (define cenv (get-computepool env))
+  (for ([i (get-num-dp-threads env)])
+       (let ([thread (get-dp-thread cenv i)])
+         (if (thread-running? thread)
+             (printf "thd #~a: Running\n" i)
+             (if (thread-dead? thread)
+                 (printf "thd #~a: Dead\n" i)
+                 (printf "thd #~a: Sleeping\n" i)))))
+  (printf "\n"))
+
+
+;; Wait until total task queue lengths == 0 and threads are asleep and return 
+;; time in (decimal) milliseconds waited. If print is set to #t, will 
+;; periodically print queue lengths
 (define (wait-dp env [print #f])
   (define cenv (get-computepool env))
-  (define idxs (list))
-  (for ([i (get-num-dp-threads env)])
-       (set! idxs (append idxs (list i))))
-  (define check-in-time (current-inexact-milliseconds))
-  (define (inner-loop env idxs)
-    (let ([lens (map (lambda (idx) (queue-length (get-dp-queue cenv idx))) idxs)]
-          [done #t])
-      (for-each 
-        (lambda (len) 
-          (when (> len 0) (set! done #f)))
-        lens)
-      (when (not done)
-        (let ()
-          (when (> (- (current-inexact-milliseconds) check-in-time) 5000)
-            (set! check-in-time (current-inexact-milliseconds))
-            (when print
-              (print-queue-lens env)
-              ;(printf " ~a; " (queue-length (get-dp-queue env i))))
-              ;(set! sanity-debug #t)
-              (printf "\nWaiting for all tasks to complete...\n")))
-          (sleep 0.01)
-          (inner-loop env idxs)))))
-  (inner-loop env idxs)
-  (when print
-    (print-queue-lens env))
-  (set! sanity-debug #f))
+  (define (wait-loop env 
+                     cenv
+                     [start-time (current-inexact-milliseconds)]
+                     [check-in-time (current-inexact-milliseconds)] 
+                     [idxs (build-list (get-num-dp-threads env)
+                                       (lambda (i) i))])
+    (let ([running (ormap (lambda (idx)
+                            (if (> (queue-length (get-dp-queue cenv idx)) 0)
+                                #t
+                                (if (thread-running? (get-dp-thread cenv idx))
+                                    #t
+                                    #f)))
+                          idxs)])
+      (if running
+          (if (and print 
+                   (> (- (current-inexact-milliseconds) check-in-time) 5000))
+              (let ([new-check-in (current-inexact-milliseconds)])
+                (print-queue-lens env)
+                (print-thread-states env)
+                (printf "\nWaiting for all tasks to complete...\n")
+                (sleep 0.01)
+                (wait-loop env cenv start-time new-check-in idxs))
+              (let ()
+                (sleep 0.01)
+                (wait-loop env cenv start-time check-in-time idxs)))
+          (- (current-inexact-milliseconds) start-time))))
+  (let ([wait-time (wait-loop env cenv)])
+    (when print 
+      (let ()
+        (print-queue-lens env)
+        (printf "Waited for ~a milli\n" wait-time)))
+    wait-time))
 
 (define pr #t)
 (define wait #f)

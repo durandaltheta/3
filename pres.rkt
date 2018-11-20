@@ -14,8 +14,9 @@
          go-ex 
          message-ex
          yield-ex 
-		 testing-ex
+         testing-ex
          interaction-ex
+         datapool-ex
          redirect-go-ex
          redirect-handler-ex
          non-trivial-computation-ex)
@@ -45,8 +46,8 @@
 ;------------------------------------------------------------------------------
 (define (go-ex)
 
-  ;create a new scope with a new datapool connected to a new datapool with 2 
-  ;worker threads
+  ;create a new scope with a new datapool connected to a new 
+  ;datapool with 2 worker threads
   (let ([datapool (make-datapool (make-computepool 2))])
 
     (define-coroutine
@@ -55,6 +56,9 @@
 
     ;send a suspended coroutine as a new task for the worker threads
     (go datapool (ex-go-coroutine 27))
+
+    ;wait for tasks to be completed
+    (wait-dp datapool)
 
     ;kill worker threads
     (close-dp datapool))) 
@@ -84,7 +88,7 @@
 
     ;send our message to be handled
     (send-message datapool ex-message)
-
+    (wait-dp datapool)
     (close-dp datapool)))
 
 
@@ -104,7 +108,7 @@
       ;only useful for user managed code where you expect yield results
       (yield 0) 
       ;this line blocks until there's something in the channel to get
-      (printf "~a\n" (ch-get ch)))
+      (printf "~a" (ch-get ch)))
 
     ;the previous coroutine cannot complete until this coroutine completes
     (define-coroutine
@@ -113,7 +117,7 @@
 
     (go dp (ex-yield ch))
     (go dp (another-coroutine ch))
-
+    (wait-dp dp)
     (close-dp dp)))
 
 
@@ -151,30 +155,34 @@
 ;required for a given task. Here we pass information between 2 executing (go)
 ;tasks
 (define (interaction-ex)
-
   ;define coroutine which passes a 'ball' back and forth through channels
   (define-coroutine
     (pass-ball who in out pass-limit)
     (define (intern-recursion who in out pass-limit)
       ;block till we get the ball
       (let ([ball (ch-get in)])
-        (printf "~a catches the ball\n" who)
-        (when (not (equal? pass-limit 0))
+        (printf "\n~a catches the ball\n" who)
+        (printf "~a throws the ball\n" who)
+        
+        ;determine if the game is still going
+        (if (equal? ball 'ball)
             (let ([new-limit (- pass-limit 1)])
-              (ch-put out ball)
-              (printf "~a throws the ball\n\n" who)
-              (intern-recursion who in out new-limit)))))
+              (if (equal? new-limit 0)
+                  (ch-put out 'done) ;decide we're done playing
+                  (let ()
+                    (ch-put out ball)
+                    (intern-recursion who in out new-limit))))
+            (printf "~a takes the ball inside\n" who))))
 
     (intern-recursion who in out pass-limit))
-
 
   (let ([dp (make-datapool (make-computepool 2))]
         [ch1 (channel)]
         [ch2 (channel)]
         [pass-limit 3])
-    (ch-put ch2 'ball)
     (go dp (pass-ball "Son" ch1 ch2 pass-limit))
     (go dp (pass-ball "Dad" ch2 ch1 pass-limit))
+    (ch-put ch1 'ball)
 
     (wait-dp dp)
     (close-dp dp)))
@@ -182,58 +190,34 @@
 
 
 
-;------------------------------------------------------------------------------
-;For this ex, we'll look at doing non-trivial computation. Say we run a 
-;web service like https://www.dcode.fr/prime-numbers-search, where you want to
-;return to the user a requested nth prime number. Here's how you could 
-;calculate it using 3
-(define (non-trivial-computation-ex nth)
+;------------------------------------------------------------------------------ 
+;In this example we will examine how we can register and retrieve data from a
+;datapool
+(define (datapool-ex)
+  (define data1 3)
+  (define data2 "some text")
 
-  ;defining a coroutine to calculate the cpu intensive task of calculating the 
-  ;nth prime
-  (define-coroutine 
-    (find-nth-prime-co n output-channel)
+  (define test-class%
+    (class object% 
+           (super-new)
+           (init-field field1
+                       field2)))
 
-    ;;Return #t if given number is prime, else #f
-    (define (is-prime? n [i 2])
-      (if (>= i n)
-          #t
-          (if (equal? 0 (remainder n i))
-              #f
-              (let ([new-i (+ i 1)])
-                (is-prime? n new-i)))))
-
-    ;;Find the nth prime number
-    (define (find-nth-prime n [candidate 2] [count 2])
-      (if (equal? n 0)
-          candidate
-          (let ([new-count (+ count 1)]
-                [next-n (- n 1)])
-            (if (is-prime? count)
-                (find-nth-prime next-n count new-count)
-                (find-nth-prime n candidate new-count)))))
-
-    (let ([nth-prime (find-nth-prime n)])
-      (ch-put output-channel nth-prime)))
+  (define data3 (make-object test-class% #f 'a-symbol))
 
 
-  ;launch our cpu intensive task and do other work
-  (let* ([output-channel (channel)]
-         [my-datapool (make-datapool (make-computepool 1))]
-         [suspended-coroutine (find-nth-prime-co nth output-channel)])
-    (printf "\nRun our coroutine to find ~ath prime number\n" nth)
-    (go my-datapool suspended-coroutine)
-    (printf "Now we can do other things or wait for it to finish\n")
-    (define (print-loop ch)
-      (let ([res (ch-get ch #f)])
-        (if res
-            (printf "Here's our ~ath prime: ~a\n" nth res)
-            (let ()
-              (printf "Doing other things!\n")
-              (sleep 1.0)
-              (print-loop ch)))))
-    (print-loop output-channel)
-    (close-dp my-datapool))) 
+  (let* ([dp (make-datapool (make-computepool 1))]
+         [key1 (register-data! dp data1)]
+         [key2 (register-data! dp data2)]
+         [key3 (register-data! dp data3)])
+
+    (printf "Value of retrieved data1: ~a\n" (get-data dp key1))
+    (printf "Value of retrieved data2: ~a\n" (get-data dp key2))
+    (printf "Value of retrieved data-object field1: ~a\n" (get-data-field dp key3 'field1))
+    (printf "Value of retrieved data-object field2: ~a\n" (get-data-field dp key3 'field2))
+    (set-data! dp key1 4)
+    (printf "Value of modified data1: ~a\n" (get-data dp key1))
+    (close-dp dp)))
 
 
 
@@ -246,7 +230,7 @@
   ;setup our data 
   (define test-data 3)
 
-  ;define a coroutine that outputs some data as a list
+  ;define a coroutine that outputs data (in this case 5)
   (define-coroutine
     (output-new-test-data)
     5)
@@ -303,7 +287,7 @@
         ;specify input values from handler's datapool to get when calling 
         ;output-modified
         (list (list data-key #f))
-        ;specify return destinatinos 
+        ;specify return destinations 
         (list (list '#:data data-key #f)))
 
       ;send a message to our handler
@@ -314,3 +298,59 @@
       ;print the modified field results
       (printf "\ntest data's new value: ~a\n" (get-data dp data-key))
       (close-dp dp))))
+
+
+
+
+;------------------------------------------------------------------------------
+;For this ex, we'll look at doing non-trivial computation. Say we run a 
+;web service like https://www.dcode.fr/prime-numbers-search, where you want to
+;return to the user a requested nth prime number. Here's how you could 
+;calculate it using 3
+(define (non-trivial-computation-ex nth)
+
+  ;defining a coroutine to calculate the cpu intensive task of calculating the 
+  ;nth prime
+  (define-coroutine 
+    (find-nth-prime-co n output-channel)
+
+    ;;Return #t if given number is prime, else #f
+    (define (is-prime? n [i 2])
+      (if (>= i n)
+          #t
+          (if (equal? 0 (remainder n i))
+              #f
+              (let ([new-i (+ i 1)])
+                (is-prime? n new-i)))))
+
+    ;;Find the nth prime number
+    (define (find-nth-prime n [candidate 2] [count 2])
+      (if (equal? n 0)
+          candidate
+          (let ([new-count (+ count 1)]
+                [next-n (- n 1)])
+            (if (is-prime? count)
+                (find-nth-prime next-n count new-count)
+                (find-nth-prime n candidate new-count)))))
+
+    (let ([nth-prime (find-nth-prime n)])
+      (ch-put output-channel nth-prime)))
+
+
+  ;launch our cpu intensive task and do other work
+  (let* ([output-channel (channel)]
+         [my-datapool (make-datapool (make-computepool 1))]
+         [suspended-coroutine (find-nth-prime-co nth output-channel)])
+    (printf "\nRun our coroutine to find ~ath prime number\n" nth)
+    (go my-datapool suspended-coroutine)
+    (printf "Now we can do other things or wait for it to finish\n")
+    (define (print-loop ch)
+      (let ([res (ch-get ch #f)])
+        (if res
+            (printf "Here's our ~ath prime: ~a\n" nth res)
+            (let ()
+              (printf "Doing other things!\n")
+              (sleep 1.0)
+              (print-loop ch)))))
+    (print-loop output-channel)
+    (close-dp my-datapool))) 
