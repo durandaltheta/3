@@ -11,15 +11,14 @@
 
 
 ;;;TODO:
-;;; 1. Split datapool data from datapool cpu threads 
-;;; 2. Put everything in structs to make internal implementation less brittle
-;;; 3. Implement coroutine scheduler thread (sends signal to thread running oldest coroutine to (yield) when there are tasks waiting in the queues and no new task has been taken from a queue in x milli)
-;;; 4. Improve (go) efficiency 
-;;; 5. Implement and improve error handling
-;;; 6. Implement input argument santization
-;;; 7. Possibly improve hash and/or queue efficiency
-;;; 8. Implement improvements based on feedback
-;;; 9. Convert to C library (requires custom code for several components not supported by out of the box C)
+;;; 1. Put everything in structs to make internal implementation less brittle
+;;; 2. Improve (go) efficiency 
+;;; 3. Implement and improve error handling
+;;; 4. Implement input argument santization
+;;; 5. Possibly improve hash and/or queue efficiency
+;;; 6. Implement improvements based on feedback
+;;; 7. Convert to C or C++ library 
+
 
 (provide 
   ;;;DATAPOOL 
@@ -180,7 +179,7 @@
   (when print
     (let ()
       (set! *cur-test-section* name)
-      (if *tests-started*
+      (if (not *tests-started*)
           (let ()
             (print-test-report)
             (printf "\n\n"))

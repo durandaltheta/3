@@ -322,7 +322,7 @@
       wait)
 
     ;Verify we can kill the datapool environment
-    (close-dp env)
+    (close-dp env #t)
 
     (for ([i num-threads])
          (let ([o (open-output-string)])
@@ -473,7 +473,7 @@
     ;verify get-data-free-key-q
     (test-true? "get-data-free-key-q" (queue? (get-data-free-key-q env)) pr wait)
 
-    (close-dp env)))
+    (close-dp env #t)))
 ;;**************************************
 
 
@@ -527,7 +527,7 @@
     (test-equal? "q-len idx 0" (queue-length (get-dp-queue (get-computepool env) 0)) 1 pr wait)
     (test-equal? "q-len idx 1" (queue-length (get-dp-queue (get-computepool env) 1)) 2 pr wait)
 
-    (close-dp env)))
+    (close-dp env #t)))
 ;;**************************************
 
 
@@ -573,7 +573,7 @@
                   (> len-0 (queue-length (get-dp-queue cenv 0))) 
                   pr 
                   wait))
-    (close-dp env)))
+    (close-dp env #t)))
 ;;**************************************
 
 
@@ -630,7 +630,7 @@
            (let ([val (list-ref inp-vals2 i)]
                  [ret (ch-get ch #f)])
              (test-equal? "Did expected val get placed in channel" ret val pr wait))))
-    (close-dp env)))
+    (close-dp env #t)))
 ;;**************************************
 
 
@@ -688,7 +688,7 @@
       (let ([key (register-data! env test-object)])
         (test-equal? "register-data! object succeeds" key 1 pr wait)
         (test-equal? "get-data-hash hash-count" (hash-count (get-data-hash env)) (+ hash-size 1) pr wait)))
-    (close-dp env)))
+    (close-dp env #t)))
 ;;**************************************
 
 
@@ -797,7 +797,7 @@
                           ((car (list-ref post-handlers i)))
                           pr
                           wait))))
-    (close-dp env)))
+    (close-dp env #t)))
 
 
 ;;**************************************
@@ -994,7 +994,7 @@
                          ret3
                          pr 
                          wait)))))
-    (close-dp env)))
+    (close-dp env #t)))
 ;;**************************************
 
 
@@ -1052,7 +1052,7 @@
         0
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "2. delete-data! data-key where message handlers have source set to data-key removes handlers from handler hash\n")
   (let* ([num-threads 8]
@@ -1089,7 +1089,7 @@
         0
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "3. delete-data! data-key where message handler does *not* have source set to data-key remains in handler hash\n")
   (let* ([num-threads 8]
@@ -1125,7 +1125,7 @@
         1
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "4. delete-data! data-key where message handlers do *not* have source set to data-key remain in handler hash\n")
   (let* ([num-threads 8]
@@ -1162,7 +1162,7 @@
         1
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "5. delete-data! data-key where 1 handler has source set to data-key and another handler does not, only deletes the first handler\n")
   (let* ([num-threads 8]
@@ -1206,7 +1206,7 @@
         pr
         wait))
 
-    (close-dp env)))
+    (close-dp env #t)))
 ;;**************************************
 
 
@@ -1264,7 +1264,7 @@
         0
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "2. delete-data! data-key where message handlers have input-data set to data-key deletes handlers from hash\n")
   (let* ([num-threads 8]
@@ -1301,7 +1301,7 @@
         0
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "3. delete-data! data-key where message handler does not have input-data to data-key does *not* delete handler from hash\n")
   (let* ([num-threads 8]
@@ -1337,7 +1337,7 @@
         1
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "4. delete-data! data-key where message handlers do not have input-data set to data-key does *not* delete handlers from hash\n")
   (let* ([num-threads 8]
@@ -1374,7 +1374,7 @@
         1
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "5. delete-data! data-key where 1 handler has input-data set to data-key and another handler does not, only deletes the first handler\n")
   (let* ([num-threads 8]
@@ -1417,7 +1417,7 @@
         1
         pr
         wait))
-    (close-dp env)))
+    (close-dp env #t)))
 ;;**************************************
 
 
@@ -1476,7 +1476,7 @@
         0
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "2. delete data-key where message handlers have return-destinations set to data-key deletes handlers from hash\n")
   (let* ([num-threads 8]
@@ -1513,7 +1513,7 @@
         0
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "3. delete data-key where message handler does not have return-destinations to data-key does *not* delete handler from hash\n")
   (let* ([num-threads 8]
@@ -1549,7 +1549,7 @@
         1
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "4. delete data-key where message handler does not have return-destinations to data-key does *not* delete handler from hash\n")
   (let* ([num-threads 8]
@@ -1586,7 +1586,7 @@
         1
         pr
         wait))
-    (close-dp env))
+    (close-dp env #t))
 
   (printf "5. delete data-key where 1 handler has return-destinations set to data-key and another handler does not, only deletes the first handler\n")
   (let* ([num-threads 8]
@@ -1629,7 +1629,7 @@
         1
         pr
         wait))
-    (close-dp env)))
+    (close-dp env #t)))
 ;;**************************************
 
 
@@ -1668,7 +1668,7 @@
         (printf "Benchmark time (milli) for ~a (go) calls each iterating ~a times on ~a threads with no yields or returns\n" v v num-threads)
         (printf "loop iterations per second: ~a\n" (iterations-per-second time (* v v)))))
 
-    (close-dp env)))
+    (close-dp env #t)))
 ;;--------------------------------------
 
 
@@ -1776,7 +1776,7 @@
         (let ([time (- (current-inexact-milliseconds) start-time)])
           (printf "Benchmark time (milli) for ~a (go) calls with ~a evaluations on ~a threads and ~a parallel processed futures: ~a\n"  num-threads x num-threads 8 time)
           (printf "loop iterations per second: ~a\n\n" (iterations-per-second time iterations))))
-      (close-dp env))))
+      (close-dp env #t))))
 ;;-------------------------------------- 
 
 
@@ -1847,7 +1847,7 @@
     ;------------------------------------------------------------------------ 
     ;handle results in the data hash using message handler
 
-    (close-dp env)))
+    (close-dp env #t)))
 ;;--------------------------------------
 
 
@@ -1914,8 +1914,8 @@
                    pr 
                    wait))
 
-    (close-dp env)
-    (close-dp env2)))
+    (close-dp env #t)
+    (close-dp env2 #t)))
 
 
 
@@ -1945,4 +1945,5 @@
 
   (print-test-report))
 
+;(test-go-stress-3)
 (run-3-unit-tests)
