@@ -18,6 +18,8 @@
   (import (rnrs)
           (chezscheme))
 
+  (internal-defines-as-letrec* #t)
+
 
   ;;;----------------------------------------------------------------------------
   ;;; COMMUNICATION
