@@ -2,7 +2,7 @@
   (go)
   (export
     ;;;COMMUNICATION
-    channel
+    channel ;channel record type definition
     make-channel ;create an asynchronous channel for inter-thread communication
     ch-get! ;get from a channel
     ch-put! ;send into a channel
@@ -21,9 +21,10 @@
   (internal-defines-as-letrec* #t)
 
 
-  ;;;----------------------------------------------------------------------------
+  ;;;--------------------------------------------------------------------------
   ;;; COMMUNICATION
-  ;;;----------------------------------------------------------------------------
+  ;;;-------------------------------------------------------------------------- 
+  ;;; Modified bounded queue example code in chez user guide
   (define-record-type 
     channel
     (fields
@@ -46,6 +47,10 @@
   (define (channel-empty? ch)
     (echv? (channel-len ch) 0))
 
+  (define incr
+    (lambda (ch i)
+      (modulo (+ i 1) (vector-length (channel-data ch)))))
+
   (define ch-get!
     (lambda (ch [block #t])
       (with-mutex (channel-mutex ch)
@@ -55,7 +60,8 @@
                         [(= head (channel-tail ch))
                          (if block
                            (let ()
-                             (condition-wait (channel-ready ch) (channel-mutex ch))
+                             (condition-wait (channel-ready ch) 
+                                             (channel-mutex ch))
                              (loop))
                            #f)]
                         [else
@@ -65,7 +71,7 @@
                           (vector-ref (channel-data ch) head)])))))) 
 
   (define ch-put!
-    (lambda (item ch)
+    (lambda (ch item)
       (with-mutex (channel-mutex ch)
                   (let loop ()
                     (let* ([tail (channel-tail ch)] [tail^ (incr ch tail)])
@@ -79,14 +85,10 @@
                           (channel-len-set! ch (- 1 (channel-len ch)))
                           (condition-signal (channel-ready ch))])))))) 
 
-  (define incr
-    (lambda (ch i)
-      (modulo (+ i 1) (vector-length (channel-data ch)))))
 
-
-  ;;;----------------------------------------------------------------------------
+  ;;;--------------------------------------------------------------------------
   ;;; COMPUTEPOOL
-  ;;;---------------------------------------------------------------------------- 
+  ;;;-------------------------------------------------------------------------- 
   ;;create computepool cpironment of worker threads
   (define (make-computepool [num-threads *DEFAULT-NUM-THREADS*])
     (let ([ret (vector 
@@ -148,63 +150,33 @@
     (vector-ref (vector-ref cp 0) 2))
 
 
-  ;;;----------------------------------------------------------------------------
+  ;;;--------------------------------------------------------------------------
   ;;; COMPUTATION - thread management
-  ;;;----------------------------------------------------------------------------
+  ;;;--------------------------------------------------------------------------
   ;;;threads
   ;; Get a thread pid at provided index
   (define (get-cp-thread cp idx)
-    (vector-ref 
-      (vector-ref 
-        (vector-ref 
-          cp
-          1) 
-        idx) 
-      0))
+    (vector-ref (vector-ref (vector-ref cp 1) idx) 0))
 
 
   ;; Get a thread task channel at provided index
   (define (get-cp-channel cp idx)
-    (vector-ref 
-      (vector-ref 
-        (vector-ref 
-          cp
-          1) 
-        idx) 
-      1))
+    (vector-ref (vector-ref (vector-ref cp 1) idx) 1))
 
 
   ;; Get a thread task channel mutex at provided index
   (define (get-cp-channel-mut cp idx)
-    (vector-ref 
-      (vector-ref 
-        (vector-ref 
-          cp
-          1) 
-        idx) 
-      2))
+    (vector-ref (vector-ref (vector-ref cp 1) idx) 2))
 
 
   ;; Get a thread task channel mutex at provided index
   (define (get-cp-resume-cond cp idx)
-    (vector-ref 
-      (vector-ref 
-        (vector-ref 
-          cp
-          1) 
-        idx) 
-      3))
+    (vector-ref (vector-ref (vector-ref cp 1) idx) 3))
 
 
   ;; Get a thread task channel mutex at provided index
   (define (get-cp-resume-mut cp idx)
-    (vector-ref 
-      (vector-ref 
-        (vector-ref 
-          cp
-          1) 
-        idx) 
-      4))
+    (vector-ref (vector-ref (vector-ref cp 1) idx) 4))
 
 
   ;; Get the index of the fullest thread task channel
@@ -230,7 +202,10 @@
 
 
   ;; PUBLIC API
-  (define (go thunk [out-channel #f] [fuel *GO-ENGINE-FUEL*] [cp *DEFAULT-COMPUTEPOOL*])
+  (define (go thunk 
+              [out-channel #f] 
+              [fuel *GO-ENGINE-FUEL*] 
+              [cp *DEFAULT-COMPUTEPOOL*])
     (when (eqv? cp 'unset) 
       (let ()
         (set! *DEFAULT-COMPUTEPOOL* (make-computepool *DEFAULT-NUM-THREADS*))
@@ -247,7 +222,7 @@
   (define (go-engine cp engine output-channel fuel)
     (let ([q-idx (get-min-cp-q-idx cp)])
       (mutex-acquire (get-cp-channel-mut cp q-idx))
-      (ch-put! (list engine out-channel fuel) (get-cp-channel cp q-idx))
+      (ch-put! (get-cp-channel cp q-idx) (list engine out-channel fuel))
       (mutex-release (get-cp-channel-mut cp q-idx)))
 
     ;resume cp-thread if waiting on condition
@@ -255,12 +230,12 @@
     #t)
 
 
-  ;;;----------------------------------------------------------------------------
+  ;;;--------------------------------------------------------------------------
   ;;; COMPUTATION - thread functions
-  ;;;----------------------------------------------------------------------------
+  ;;;--------------------------------------------------------------------------
 
-  ;; Return thread's channel index if not empty, otherwise gets the index of the 
-  ;; fullest channel.
+  ;; Return thread's channel index if not empty, otherwise gets the index of 
+  ;; the fullest channel.
   (define (get-task-q-idx cp thread-idx)
     (let ([thread-channel (get-cp-channel cp thread-idx)])
       (if (equal? (channel-length thread-channel) 0)
@@ -303,7 +278,8 @@
             #t))
         (lambda (new-engine)
           (let ()
-            (go-engine cp new-engine return-dest) ;place task at the back of a channel
+            (go-engine cp new-engine return-dest) ;place task at the back of a 
+                                                  ;channel
             #f)))))
 
 
@@ -368,9 +344,9 @@
       (newline))
 
 
-    ;; Wait until total task channel lengths == 0 and threads are asleep and return 
-    ;; time in (decimal) milliseconds waited. If print is set to #t, will 
-    ;; periodically print channel lengths
+    ;; Wait until total task channel lengths == 0 and threads are asleep and 
+    ;; return time in (decimal) milliseconds waited. If print is set to #t, 
+    ;; will periodically print channel lengths
     (define (wait-computepool cp [print #f])
       (define (wait-loop cp 
                          [start-time (current-inexact-milliseconds)]
