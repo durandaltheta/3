@@ -4,7 +4,7 @@
     ;task record type. Pass a list of these to parallel
     task  
 
-    ;create a box of tasks for parallel execution
+    ;create a box of tasks for parallel execution from a list of task records
     make-task-box 
 
     ;enqueue a new task record to the current task box. This works even from 
