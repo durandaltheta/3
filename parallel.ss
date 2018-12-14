@@ -1,13 +1,13 @@
 (library 
   parallel
   (export 
-    ;task record type. Pass a list of these to parallel
+    ;task record type. Pass a list of these to make-task-box
     task  
 
     ;create a box of tasks for parallel execution from a list of task records
     make-task-box 
 
-    ;enqueue a new task record to the current task box. This works even from 
+    ;enqueue a new task record to the task-box argument. This works even from 
     ;within running tasks
     enqueue-task!
 
