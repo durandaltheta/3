@@ -12,6 +12,7 @@
     enqueue-task!
 
     ;execute all tasks contained in given task-box in parallel before returning
+    ;all task return values as a list in the order completed.
     parallel  
 
     ;a record of input/output communication objects and manipulation functions
