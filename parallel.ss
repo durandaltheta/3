@@ -124,8 +124,7 @@
            (new input-source input-manager get-block! get-try! #f #f)]))))
 
 
-  ;block if only task 
-  ;do not block if more than one task 
+  ;execute tasks in task-box in parallel
   (define (parallel task-box)
     (define (exec-tasks task-box results)
       (if (null? (unbox task-box))
