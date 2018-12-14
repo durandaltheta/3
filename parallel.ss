@@ -7,6 +7,8 @@
     ;create a box of tasks for parallel execution
     make-task-box 
 
+    ;enqueue a new task record to the current task box. This works even from 
+    ;within running tasks
     enqueue-task!
 
     ;execute all tasks contained in given task-box in parallel before returning
