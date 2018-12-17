@@ -7,6 +7,8 @@
     ;  (engine-or-thunk fuel is-engine-flag)
     ;Pass a list of these to make-task-box
     task  
+    make-task 
+    task?
 
     ;create a box of tasks for parallel execution from a list of task records
     make-task-box 
@@ -132,7 +134,7 @@
 
       ;Some kind of communication object of arbitrary implementation: 
       ;queue, channel, etc. Results from thunk execution are placed here 
-      ;individually when parallel returns a batch of results. 
+      ;when parallel internally returns a batch of results. 
       ;
       ;If a more asynchronous solution is required, simply have your tasks 
       ;return their results internally to your communication object. This is 
