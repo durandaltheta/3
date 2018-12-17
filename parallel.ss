@@ -1,7 +1,11 @@
 (library 
-  parallel
+  (parallel)
   (export 
-    ;task record type. Pass a list of these to make-task-box
+    ;task record type. Can take different (make) arguments:
+    ;  (thunk)
+    ;  (thunk fuel)
+    ;  (engine-or-thunk fuel is-engine-flag)
+    ;Pass a list of these to make-task-box
     task  
 
     ;create a box of tasks for parallel execution from a list of task records
@@ -20,7 +24,7 @@
 
     ;same as parallel but uses a task-manager to continuously gather and 
     ;enqueue new tasks. Does not return until #f is received from input-source. 
-    ;Only useful when getting tasks from another thread or from another process
+    ;Useful when getting tasks from another thread or from another process
     managed-parallel) 
   (import (chezscheme))
 
@@ -44,11 +48,11 @@
 
   (define (make-task-box task-list)
     (define (validate-task-list task-list)
-      (if (null? lst)
+      (if (null? task-list)
           (list #t '())
-          (if (task? (car lst))
-              (validate-task-list (cdr lst))
-              (list #f (car lst)))))
+          (if (task? (car task-list))
+              (validate-task-list (cdr task-list))
+              (list #f (car task-list)))))
 
     (let ([res (validate-task-list task-list)])
       (if (car res)
@@ -68,60 +72,11 @@
                  "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)))
 
 
-  (define (dequeue-task! task-box)
+  (define (dequeue-task! task-box) ;null? checking happens in (parallel)
     (let ([tasks (unbox task-box)])
       (let ([task (car tasks)])
         (set-box! task-box (cdr tasks))
         task)))
-
-
-  (define-record-type 
-    task-manager 
-    (field 
-      ; some kind of communication object of arbitrary implementation: queue, 
-      ; channel, etc. Further tasks/thunks to evaluate are gathered here. 
-      ; managed-parallel ends collecting tasks when a #f is received from this 
-      ; object
-      (mutable input-source) 
-
-      ; A function that takes one argument. Output from this function 
-      ; is placed in the task-box with enqueue-task! Pass #f to this field if 
-      ; this functionality is not desired
-      (immutable input-manager)
-
-      ; function that takes one argument (input-source) and blocks 
-      ; if nothing available to return, otherwise returns obtained value
-      (immutable get-block!)
-
-      ; function that takes one argument (input-source) and returns 
-      ; 'empty if nothing available to return, otherwise returns obtained value
-      (immutable get-try!) 
-
-      ;;OPTIONAL FIELDS:
-      ;; The following fields are not required. However, both must be absent or 
-      ;; provided together, record creation will fail if only one field is 
-      ;; given
-
-      ; Some kind of communication object of arbitrary implementation: 
-      ; queue, channel, etc. Results from thunk execution are placed here 
-      ; individually when parallel returns a batch of results. 
-      ;
-      ; If a more asynchronous solution is required, simply have your tasks 
-      ; return their results internally to your communication object. This is 
-      ; threadsafe because parallel doesn't use threads!
-      (mutable result-destination) 
-
-      ;function that puts a value into a communication object. If 
-      ;this operation does not block, may lose computation results, but is up 
-      ;to implementation 
-      (immutable put!)) 
-    (protocol 
-      (lambda (new)
-        (case-lambda 
-          [(input-source input-manager get-block! get-try! result-destination put!)
-           (new input-source get-block! get-try! result-destination put!)]
-          [(input-source input-manager get-block! get-try!)
-           (new input-source input-manager get-block! get-try! #f #f)]))))
 
 
   ;execute tasks in task-box in parallel
@@ -144,23 +99,83 @@
     (exec-tasks task-box '()))
 
 
+  (define-record-type 
+    task-manager 
+    (fields
+      ;some kind of communication object of arbitrary implementation: queue, 
+      ;channel, etc. Further tasks/thunks to evaluate are gathered here. 
+      ;managed-parallel ends collecting tasks when a #f is received from this 
+      ;object
+      (mutable input-source) 
+
+      ;A function that takes one argument. Output from this function 
+      ;is placed in the task-box with enqueue-task! Pass #f to this field if 
+      ;this functionality is not desired 
+      ;
+      ;This is useful when input from input-source does not come in the form 
+      ;of an executable task, and must be interpreted (for instance, when 
+      ;input-source is a cross-process communication queue).
+      (immutable input-manager)
+
+      ;function that takes one argument (input-source) and blocks 
+      ;if nothing available to return, otherwise returns obtained value
+      (immutable get-block!)
+
+      ;function that takes one argument (input-source) and returns 
+      ;'empty if nothing available to return, otherwise returns obtained value
+      (immutable get-try!) 
+
+      ;OPTIONAL FIELDS:
+      ;The following fields are not required. However, both must be absent or 
+      ;provided together, record creation will fail if only one field is 
+      ;given
+
+      ;Some kind of communication object of arbitrary implementation: 
+      ;queue, channel, etc. Results from thunk execution are placed here 
+      ;individually when parallel returns a batch of results. 
+      ;
+      ;If a more asynchronous solution is required, simply have your tasks 
+      ;return their results internally to your communication object. This is 
+      ;threadsafe because parallel doesn't use threads!
+      (mutable result-destination) 
+
+      ;function that puts a value into a communication object. If 
+      ;this operation does not block, may lose computation results, but is up 
+      ;to implementation 
+      (immutable put!)) 
+    (protocol 
+      (lambda (new)
+        (case-lambda 
+          [(input-source input-manager get-block! get-try! result-destination put!)
+           (new input-source input-manager get-block! get-try! result-destination put!)]
+          [(input-source input-manager get-block! get-try!)
+           (new input-source input-manager get-block! get-try! #f #f)]))))
+
+
+  ;Same as (parallel) except it can continuously take new input from outside 
+  ;the current thread or process using a task-manager record. Gathering input 
+  ;will only block if no tasks are executing, otherwise it gathers input 
+  ;periodically without blocking.
   (define (managed-parallel task-box task-manager)
     (define (run)
       (let ([collecting #t]
             [input-source (task-manager-input-source task-manager)]
-            [input-manager (task-manager-input-manager task-manager]
+            [input-manager (task-manager-input-manager task-manager)]
             [result-destination (task-manager-result-destination task-manager)]
             [get-block! (task-manager-get-block! task-manager)]
             [get-try! (task-manager-get-try! task-manager)]
             [put! (task-manager-put! task-manager)])
 
+        ;;---------------------------------------------------------------------
+        ;;DEFINITIONS
+        ;;---------------------------------------------------------------------
         ;If input == #f, stop collecting input this invocation of 
         ;managed-parallel
         (define (handle-input! input)
           (if input 
               (if input-manager
-                (enqueue-task! task-box (input-manager input))
-                (enqueue-task! task-box input))
+                  (enqueue-task! task-box (input-manager input))
+                  (enqueue-task! task-box input))
               (set! collecting #f)))
 
         ;attempt to get input and put input into task-box. If no input found 
@@ -179,13 +194,17 @@
                       (get-input block))))
               '()))
 
-        ;If we're still collecting input, add and input collection task to the 
-        ;task-box
-        (when collecting (enqueue-thunk! task-box (lambda () (get-input #f))))
 
-        ;Handle results of parallel
+        ;Re-enqueueing task that attempts to get more input unless no 
+        ;longer collecting input or it is the only task 
+        (define (parallel-get-input)
+          (get-input #f)
+          (when (and collecting (> (length (unbox task-box)) 0))
+            (enqueue-task! task-box (make-task parallel-get-input))))
+
+        ;function to handle results of parallel
         (define (put-results results)
-          (if (and return-destination put!)
+          (if (and result-destination put!)
               (let ([res (car results)])
                 (when (not (null? res))
                   (put! result-destination (car results)))
@@ -194,9 +213,16 @@
                     (put-results (cdr results))))
               '()))
 
+        ;;---------------------------------------------------------------------
+        ;;EXECUTION
+        ;;---------------------------------------------------------------------
+        ;If we're still collecting input, add and input collection task to the 
+        ;task-box 
+        (when collecting (enqueue-task! task-box (make-task parallel-get-input)))
+
         ;Execute all tasks and handle results, temporarily setting 'executing'
         ;flag to #t
-        (fluid-let ([executing #t]) (put-results (parallel task-box)))
+        (put-results (parallel task-box))
 
         ;If still collecting, recurse this function
         (if collecting
