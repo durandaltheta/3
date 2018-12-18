@@ -1,9 +1,9 @@
 (library 
   (parallel)
   (export 
-    ;  (thunk) -> task 
-    ;  (thunk fuel) -> task
-    ;  (engine-or-thunk fuel is-engine-flag) -> task 
+    ;  (make-task thunk) -> task 
+    ;  (make-task thunk fuel) -> task
+    ;  (make-task engine-or-thunk fuel is-engine-flag) -> task 
     ;Make a task. Pass a list of these to make-task-box to be eventually 
     ;asynchronously executed by (parallel) or (managed-parallel)
     make-task 
