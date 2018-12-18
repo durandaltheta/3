@@ -54,7 +54,7 @@
     ;     empty? : (-> input-source) -> boolean 
     ;     input-manager : (-> any) -> task-or-null 
     ;     return-destination : arbitrary-communication-object
-    ;     put! : (-> any) -> null
+    ;     put! : (-> return-destination any) -> null
     ;
     ;a record of arbitrary input/output communication objects (can be queue, 
     ;channel, etc.) and manipulation functions for use in (managed-parallel). 
