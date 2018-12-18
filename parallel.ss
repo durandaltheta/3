@@ -34,16 +34,18 @@
     ;or (managed-parallel).
     make-parallel-channel 
 
-    ;  (parallel-channel-empty? parallel-channel) -> (->) -> boolean
+    ;  (parallel-channel-empty? parallel-channel) -> (->) -> boolean 
+    ;  Returns the function that return #t if values are waiting in the channel 
+    ;  otherwise returns false.
     parallel-channel-empty? 
 
     ;  (parallel-channel-put! ch any) -> (-> any) -> '() 
     ;  Returns the function that will accept a value and place it into the 
-    ;  parallel-channel
+    ;  parallel-channel.
     parallel-channel-put! 
 
     ;  (parallel-channel-get! ch) -> (->) -> any
-    ;  Returns the function that will return a value from the parallel-channel
+    ;  Returns the function that will return a value from the parallel-channel.
     parallel-channel-get! ;blocks till data available
 
     ;  (make-task-manager input-source 
