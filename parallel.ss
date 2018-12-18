@@ -41,13 +41,27 @@
     ;  (make-task-manager input-source 
     ;                     get-block! 
     ;                     empty? 
-    ;                     input-manager 
+    ;                     input-manager
     ;                     return-destination 
-    ;                     put!) -> task-manager
-    ;a record of input/output communication objects and manipulation functions 
-    ;for use in (managed-parallel). Allows for continual accrual of input into 
-    ;running tasks in (managed-parallel) without blocking execution or busy 
-    ;waiting. Also allows input to be 
+    ;                     put!) -> task-manager 
+    ;
+    ;  breakdown of arguments:
+    ;     input-source : arbitrary-communication-object 
+    ;     get-block! : (-> input-source) -> any 
+    ;     empty? : (-> input-source) -> boolean 
+    ;     input-manager : (-> any) -> task-or-null 
+    ;     return-destination : arbitrary-communication-object
+    ;     put! : (-> any) -> null
+    ;
+    ;a record of arbitrary input/output communication objects (can be queue, 
+    ;channel, etc.) and manipulation functions for use in (managed-parallel). 
+    ;
+    ;Allows for continual accrual of input into running tasks in 
+    ;(managed-parallel) without blocking execution or busy waiting. 
+    ;
+    ;Allows input to be processed before being executed via argument function 
+    ;input-manager. Input-manager takes input from (get-block! input-source) 
+    ;and outputs a task or '()
     make-task-manager 
 
     ;  (task-manager? task-manager) -> boolean 
@@ -267,7 +281,7 @@
     (protocol 
       (lambda (new)
         (lambda (input-source get-block! empty? input-manager result-destination put!)
-           (new input-source get-block! empty? input-manager result-destination put!)))))
+          (new input-source get-block! empty? input-manager result-destination put!)))))
 
 
   ;Same as (parallel) except it can continuously take new input from outside 
@@ -291,8 +305,10 @@
         ;managed-parallel
         (define (handle-input! input)
           (if input 
-              (if input-manager
-                  (enqueue-task! task-box (input-manager input))
+              (if input-manager 
+                  (let ([processed-input (input-manager input)])
+                    (when processed-input
+                      (enqueue-task! task-box (input-manager input))))
                   (enqueue-task! task-box input))
               (set! collecting #f)))
 
