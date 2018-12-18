@@ -45,7 +45,8 @@
     ;                     return-destination 
     ;                     put!) -> task-manager 
     ;
-    ;  breakdown of arguments:
+    ;  breakdown of arguments, where (-> *) means a function that takes * as an 
+    ;  argument:
     ;     input-source : arbitrary-communication-object 
     ;     get-block! : (-> input-source) -> any 
     ;     empty? : (-> input-source) -> boolean 
