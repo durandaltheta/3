@@ -56,7 +56,7 @@
     ;     return-destination : arbitrary-communication-object
     ;     put! : (-> return-destination any) -> null
     ;
-    ;a record of arbitrary input/output communication objects (can be queue, 
+    ;A record of arbitrary input/output communication objects (can be queue, 
     ;channel, etc.) and manipulation functions for use in (managed-parallel). 
     ;
     ;Allows for continual accrual of input into running tasks in 
@@ -64,7 +64,10 @@
     ;
     ;Allows input to be processed before being executed via argument function 
     ;input-manager. Input-manager takes input from (get-block! input-source) 
-    ;and outputs a task or '()
+    ;and outputs a task or '() 
+    ;
+    ;input-manager, return-destination and put! are optional functionality. If 
+    ;said functionality is not desired, pass #f to any/all of these fields
     make-task-manager 
 
     ;  (task-manager? task-manager) -> boolean 
