@@ -27,22 +27,14 @@
     parallel  
 
     ;  (make-parallel-channel) -> parallel-channel  
-    ;  (make-parallel-channel data get! put! empty?) -> parallel-channel 
-    ;
-    ;  breakdown of arguments, where (-> *) means a function that takes * as an 
-    ;  argument: 
-    ;    data : arbitrary-communication-object 
-    ;    get! : (-> data) -> any
-    ;    put! : (-> data any) -> '()
-    ;    empty? : (-> data) -> boolean
     ;make a channel capable of communicating between asynchronous tasks 
-    ;executed by (parallel) or (managed-parallel) 
+    ;executed by (parallel) or (managed-parallel).
     ;
-    ;If make-parallel-channel is invoked with custom arguments it acts as a 
-    ;wrapper to an any arbitrary communication object
+    ;These channels are *ONLY* safe to use within tasks running in (parallel) 
+    ;or (managed-parallel).
     make-parallel-channel 
 
-    ;  (parallel-channel-empty? parallel-channel) -> boolean
+    ;  (parallel-channel-empty? parallel-channel) -> (->) -> boolean
     parallel-channel-empty? 
 
     ;  (parallel-channel-put! ch any) -> (-> any) -> '() 
@@ -176,47 +168,25 @@
       (immutable empty?))
     (protocol
       (lambda (new)
-        (let* ([ch-data '()]
+        (let* ([data '()]
                [id (incrementor)])
-          (case-lambda 
-            ;default case
-            [() (new 
-                  ch-data
-                  id
-                  (lambda () ;default get!
-                    (define (loop)
-                      (if (null? ch-data)
-                          (let ()
-                            (set-block! id #t)
-                            (engine-block)
-                            (loop))
-                          (let ([ret (car ch-data)])
-                            (set! ch-data (cdr ch-data)))))
-                    (loop))
-                  (lambda (val) ;default put!
-                    (set! ch-data (append ch-data (list val)))
-                    (append-non-empty! id))
-                  (lambda () (null? ch-data)))] ;default empty?
-            ;case to handle input communication object using parallel-channel 
-            ;as a wrapper
-            [(data put! get! empty?)
-             (lambda (new)
-               (new 
-                 data 
-                 id
-                 (lambda () ;wrapped get!
-                   (define (loop)
-                     (if (empty? data)
-                         (let ()
-                           (set-block! id #t)
-                           (engine-block)
-                           (loop))
-                         (get! data)))
-                    (loop))
-                 (lambda (val) ;wrapped put!
-                   (put! data val)
-                   (append-non-empty! id))
-                 empty?))]))))) ;wrapped empty?
+          (lambda () (new 
+                       data
+                       id
+                       (lambda () ;default get!
+                         (define (loop)
+                           (if (null? data)
+                               (let ()
+                                 (set-block! id #t)
+                                 (engine-block)
+                                 (loop))
+                               (let ([ret (car data)])
+                                 (set! data (cdr data)))))
+                         (loop))
+                       (lambda (val) ;default put!
+                         (set! data (append data (list val)))
+                         (append-non-empty! id))
+                       (lambda () (null? data)))))))) ;default empty?
 
 
   ;execute tasks in task-box in parallel
