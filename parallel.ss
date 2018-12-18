@@ -26,18 +26,32 @@
     ;returning all task return values as a list in the order completed.
     parallel  
 
-    ;  (make-parallel-channel) -> parallel-channel 
+    ;  (make-parallel-channel) -> parallel-channel  
+    ;  (make-parallel-channel data get! put! empty?) -> parallel-channel 
+    ;
+    ;  breakdown of arguments, where (-> *) means a function that takes * as an 
+    ;  argument: 
+    ;    data : arbitrary-communication-object 
+    ;    get! : (-> data) -> any
+    ;    put! : (-> data any) -> '()
+    ;    empty? : (-> data) -> boolean
     ;make a channel capable of communicating between asynchronous tasks 
-    ;executed by (parallel) or (managed-parallel)
+    ;executed by (parallel) or (managed-parallel) 
+    ;
+    ;If make-parallel-channel is invoked with custom arguments it acts as a 
+    ;wrapper to an any arbitrary communication object
     make-parallel-channel 
 
     ;  (parallel-channel-empty? parallel-channel) -> boolean
     parallel-channel-empty? 
 
-    ;  (parallel-channel-put! ch any) -> '()
+    ;  (parallel-channel-put! ch any) -> (-> any) -> '() 
+    ;  Returns the function that will accept a value and place it into the 
+    ;  parallel-channel
     parallel-channel-put! 
 
-    ;  (parallel-channel-get! ch) -> any
+    ;  (parallel-channel-get! ch) -> (->) -> any
+    ;  Returns the function that will return a value from the parallel-channel
     parallel-channel-get! ;blocks till data available
 
     ;  (make-task-manager input-source 
@@ -157,32 +171,52 @@
     (fields 
       (mutable data)
       (immutable id)
-      (immutable put!)
-      (immutable get!))
+      (immutable get!)
+      (immutable put!) ;if this blocks the whole thread will block
+      (immutable empty?))
     (protocol
       (lambda (new)
-        (lambda () 
-          (let* ([data '()]
-                 [id (incrementor)])
-            (new 
-              data
-              id
-              (lambda (val) 
-                (append-non-empty! id)
-                (set! data (append data (list val))))
-              (lambda ()
-                (define (loop)
-                  (if (null? data)
-                      (let ()
-                        (set-block! id #t)
-                        (engine-block)
-                        (loop))
-                      (let ([ret (car data)])
-                        (set! data (cdr data)))))
-                (loop))))))))
-
-  (define (parallel-channel-empty? pch)
-    (null? (parallel-channel-data pch)))
+        (let* ([ch-data '()]
+               [id (incrementor)])
+          (case-lambda 
+            ;default case
+            [() (new 
+                  ch-data
+                  id
+                  (lambda () ;default get!
+                    (define (loop)
+                      (if (null? ch-data)
+                          (let ()
+                            (set-block! id #t)
+                            (engine-block)
+                            (loop))
+                          (let ([ret (car ch-data)])
+                            (set! ch-data (cdr ch-data)))))
+                    (loop))
+                  (lambda (val) ;default put!
+                    (set! ch-data (append ch-data (list val)))
+                    (append-non-empty! id))
+                  (lambda () (null? ch-data)))] ;default empty?
+            ;case to handle input communication object using parallel-channel 
+            ;as a wrapper
+            [(data put! get! empty?)
+             (lambda (new)
+               (new 
+                 data 
+                 id
+                 (lambda () ;wrapped get!
+                   (define (loop)
+                     (if (empty? data)
+                         (let ()
+                           (set-block! id #t)
+                           (engine-block)
+                           (loop))
+                         (get! data)))
+                    (loop))
+                 (lambda (val) ;wrapped put!
+                   (put! data val)
+                   (append-non-empty! id))
+                 empty?))]))))) ;wrapped empty?
 
 
   ;execute tasks in task-box in parallel
@@ -351,12 +385,7 @@
         ;function to handle results of parallel
         (define (put-results results)
           (if (and result-destination put!)
-              (let ([res (car results)])
-                (when (not (null? res))
-                  (put! result-destination (car results)))
-                (if (null? (cdr results))
-                    '()
-                    (put-results (cdr results))))
+              (put! result-destination results)
               '()))
 
         ;;---------------------------------------------------------------------
