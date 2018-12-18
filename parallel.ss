@@ -142,9 +142,9 @@
     (set! *CHANNEL-BLOCK-ID* val)
     (set! *CHANNEL-BLOCK-FLAG* bool))
 
-  (define (append-non-empty! val bool)
+  (define (append-non-empty! val)
     (set! *CHANNEL-NON-EMPTY-IDS* (append *CHANNEL-NON-EMPTY-IDS* (list val)))
-    (set! *CHANNEL-NON-EMPTY-FLAG* bool))
+    (set! *CHANNEL-NON-EMPTY-FLAG* #t))
 
   ;function that always emits a unique numerical value per invocation
   (define incrementor (let ([id 0]) (lambda () (let ([ret id]) (set! id (+ id 1)) ret))))
@@ -165,7 +165,7 @@
               data
               id
               (lambda (val) 
-                (append-non-empty! id #t)
+                (append-non-empty! id)
                 (set! data (append data (list val))))
               (lambda ()
                 (define (loop)
