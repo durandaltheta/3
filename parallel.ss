@@ -27,8 +27,8 @@
     parallel  
 
     ;  (make-parallel-channel) -> parallel-channel 
-    ;make a channel capable of communicating between asynchronous tasks executed 
-    ;by (parallel) or (managed-parallel)
+    ;make a channel capable of communicating between asynchronous tasks 
+    ;executed by (parallel) or (managed-parallel)
     make-parallel-channel 
 
     ;  (parallel-channel-empty? parallel-channel) -> boolean
@@ -147,7 +147,10 @@
     (set! *CHANNEL-NON-EMPTY-FLAG* #t))
 
   ;function that always emits a unique numerical value per invocation
-  (define incrementor (let ([id 0]) (lambda () (let ([ret id]) (set! id (+ id 1)) ret))))
+  (define incrementor (let ([id 0]) 
+                        (lambda () (let ([ret id]) 
+                                     (set! id (+ id 1)) 
+                                     ret))))
 
   (define-record-type
     parallel-channel
@@ -196,7 +199,8 @@
       (define waiting-tasks '())
 
       (define (enqueue-waiting-task! task)
-        (set! waiting-tasks (append waiting-tasks (list *CHANNEL-BLOCK-ID* task)))
+        (set! waiting-tasks (append waiting-tasks 
+                                    (list *CHANNEL-BLOCK-ID* task)))
         (set-block! 0 #f))
 
       ;enqueue any tasks waiting for now non-empty channel id
