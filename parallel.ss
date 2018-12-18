@@ -4,9 +4,11 @@
     ;  (thunk) -> task 
     ;  (thunk fuel) -> task
     ;  (engine-or-thunk fuel is-engine-flag) -> task 
-    ;Task record type. Pass a list of these to make-task-box to be eventually 
+    ;Make a task. Pass a list of these to make-task-box to be eventually 
     ;asynchronously executed by (parallel) or (managed-parallel)
     make-task 
+
+    ;  (task? task) -> boolean
     task?
 
     ;  (make-task-box list-of-tasks) -> task-box 
