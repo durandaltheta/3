@@ -1,0 +1,30 @@
+DFC3 is a programming library that makes multithreading easy and safe. DFC3 is very small and is intended to be portable. A working prototype exists and is written in the Racket Lisp programming language. This POC is to simplify and convert the library to C++ for use in production software.
+
+
+
+- Computepool
+	- Struct
+	- Threading Algorithm
+	- Generic Worker Thread Functions
+- Engines
+	- Create engine using a combination of boost coroutines and timers
+- Asynchronous Channels
+	- Threadsafe
+	- implement functions:
+		- empty?
+		- full?
+		- blocking-get
+		- blocking-put
+		- try-get (mutex locked combination of empty? and blocking-get)
+		- try-put (mutex locked combination of full? and blocking-put)
+- Go function
+	- Version which accepts explicit computepool?
+	- Version which accepts implicit default background computepool
+		- If background computepool not initialized, initialize with settings
+	- Should accept function to evaluate and arguments (engines are made in the background)
+- Top level configuration:
+	- default background computepool (if you don't explicitly make one)
+		- need to decide default number of threads
+	- function to set default number of threads for default background computepool
+	- function to wait for computepool threads to finish running
+	- function to close a computepool gracefully
