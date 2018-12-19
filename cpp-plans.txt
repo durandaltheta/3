@@ -17,7 +17,7 @@ DFC3 is a programming library that makes multithreading easy and safe. DFC3 is v
 		- blocking-put
 		- try-get (mutex locked combination of empty? and blocking-get)
 		- try-put (mutex locked combination of full? and blocking-put)
-- Go function
+- go function/keyword
 	- Version which accepts explicit computepool?
 	- Version which accepts implicit default background computepool
 		- If background computepool not initialized, initialize with settings
