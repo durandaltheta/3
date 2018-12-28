@@ -1,15 +1,12 @@
-(library 
-  (ut-parallel)
-  (export run-ut-parallel)
+#! /usr/bin/scheme --script
+(let ()
   (import (chezscheme) (parallel) (test))
 
   (define pr #f)
   (define w #f)
 
-
     #|
     ;tests:
-    make-task 
     task?
     make-task-box 
     enqueue-task!
@@ -23,7 +20,7 @@
     managed-parallel
     |# 
   (define (ut-task?)
-    (test-section)
+    (test-section "make-task")
 
     (let ([test-task (make-task (lambda () 3))]
           [test-thunk (lambda () 3)])
@@ -34,4 +31,6 @@
     (set! pr print-result)
     (set! w wait)
     (ut-task?)
-    (print-test-report)))
+    (print-test-report))
+ 
+  (run-ut-parallel #t #f))

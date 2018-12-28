@@ -8,17 +8,22 @@
     ;asynchronously executed by (parallel) or (managed-parallel)
     make-task 
 
-    ;  (task? task) -> boolean
+    ;  (task? a) -> boolean
+    ;returns #t if argument a is a task, else returns #f
     task?
 
     ;  (make-task-box list-of-tasks) -> task-box 
     ;create a box of tasks for parallel execution from a list of task records
     make-task-box 
 
-    ;  (enqueue-task! task-box task) -> '()
+    ;  (task-box? a) -> boolean
+    ;returns #t if argument a is a task-box, else returns #f
+    task-box?
+
+    ;  (enqueue-task! task-box task) -> (values)
     ;enqueue a new task record to the task-box argument to be executed by 
-    ;(parallel) or (managed-parallel). This works even when invoked from tasks
-    ;currently being run via (parallel) or (managed-parallel).
+    ;(parallel) or (managed-parallel). This works even when invoked internally 
+    ;from tasks currently being run via (parallel) or (managed-parallel).
     enqueue-task!
 
     ;  (parallel task-box) -> list-of-task-results 
@@ -32,6 +37,17 @@
     ;
     ;These channels are *ONLY* safe to use within tasks running in (parallel) 
     ;or (managed-parallel).
+    ;
+    ;
+    ;  (make-parrallel-channel communication-object blocking-get! put! empty?)
+    ;It is possible to create a parallel channel by passing this function an 
+    ;arbitrary communication object (a queue, channel, pipe, etc..) and the 
+    ;following object manipulation functions:
+    ;  blocking-get! : returns a value from the object. Blocks if nothing in 
+    ;                  the object.
+    ;  put! : puts a value into the object. If this blocks, it will block
+    ;         the entire thread (including parallel/managed-parallel)
+    ;  empty? : returns #t if object is empty, else #f
     make-parallel-channel 
 
     ;  (parallel-channel-empty? parallel-channel) -> (->) -> boolean 
@@ -39,7 +55,7 @@
     ;  otherwise returns false.
     parallel-channel-empty? 
 
-    ;  (parallel-channel-put! ch any) -> (-> any) -> '() 
+    ;  (parallel-channel-put! ch any) -> (-> any) -> (values)
     ;  Returns a function that will accept a value and place it into the 
     ;  parallel-channel.
     parallel-channel-put! 
@@ -48,33 +64,27 @@
     ;  Returns a function that will return a value from the parallel-channel.
     parallel-channel-get! ;blocks till data available
 
-    ;  (make-task-manager input-source 
-    ;                     get-block! 
-    ;                     empty? 
-    ;                     input-manager
-    ;                     return-destination 
-    ;                     put!) -> task-manager 
+    ;  (make-task-manager input-parallel-channel
+    ;                     output-parallel-channel
+    ;                     input-manager) -> task-manager 
     ;
     ;  breakdown of arguments, where (-> *) means a function that takes * as an 
     ;  argument:
-    ;     input-source : arbitrary-communication-object 
-    ;     get-block! : (-> input-source) -> any 
-    ;     empty? : (-> input-source) -> boolean 
+    ;     input-parallel-channel : parallel-channel where data is expected to 
+    ;                              come from outside the thread or process
+    ;     output-parallel-channel : parallel-channel where data task output 
+    ;                               is sent
     ;     input-manager : (-> any) -> task-or-null 
-    ;     return-destination : arbitrary-communication-object
-    ;     put! : (-> return-destination any) -> null
-    ;
-    ;A record of arbitrary input/output communication objects (can be queue, 
-    ;channel, etc.) and manipulation functions for use in (managed-parallel). 
     ;
     ;Allows for continual accrual of input into running tasks in 
     ;(managed-parallel) without blocking execution or busy waiting. 
     ;
     ;Allows input to be processed before being executed via argument function 
-    ;input-manager. Input-manager takes input from (get-block! input-source) 
-    ;and outputs a task or '() 
+    ;input-manager. input-manager takes input from input-parallel-channel
+    ;and outputs a task (to be executed in parallel). All output values that 
+    ;are not tasks are ignored.
     ;
-    ;input-manager, return-destination and put! are optional functionality. If 
+    ;output-parallel-channel and input-manager are optional functionality. If 
     ;said functionality is not desired, pass #f to any/all of these fields
     make-task-manager 
 
@@ -89,7 +99,6 @@
     managed-parallel) 
   (import (chezscheme)) 
 
-  (define *default-task-priority 0)
   (define *default-engine-fuel* 50)
 
   (define-record-type
@@ -104,37 +113,42 @@
           [(thunk fuel) (new fuel (make-engine thunk))]
           [(engine-or-thunk fuel is-engine) 
            (if is-engine (new fuel engine-or-thunk)
-               (new fuel (make-engine engine-or-thunk)))]))))
+             (new fuel (make-engine engine-or-thunk)))]))))
 
 
-  (define (make-task-box task-list)
-    (define (validate-task-list task-list)
-      (if (null? task-list)
-          (list #t '())
-          (if (task? (car task-list))
-              (validate-task-list (cdr task-list))
-              (list #f (car task-list)))))
+  (define-record-type
+    task-box 
+    (fields (mutable contents))
+    (protocol 
+      (lambda (new) 
+        (lambda (task-list)
+          (define (validate-task-list task-list)
+            (if (null? task-list)
+              (list #t '())
+              (if (task? (car task-list))
+                (validate-task-list (cdr task-list))
+                (list #f (car task-list)))))
 
-    (let ([res (validate-task-list task-list)])
-      (if (car res)
-          (box task-list)
-          (let ()
-            (fprintf (current-error-port) 
-                     "[make-task-box] provided task ~a is not a task record, in task list: ~a; task thrown out\n" 
-                     (cadr res) 
-                     task-list)
-            (box '())))))
+          (let ([res (validate-task-list task-list)])
+            (if (car res)
+              (new (box task-list))
+              (let ()
+                (fprintf (current-error-port) 
+                         "[error make-task-box] provided task ~a is not a task record, in task list: ~a\n" 
+                         (cadr res) 
+                         task-list)
+                (new (box '())))))))))
 
 
   (define (enqueue-task! task-box task)
     (if (task? task)
-        (set-box! task-box (append (unbox task-box) (list task)))
-        (fprintf (current-error-port) 
-                 "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)))
+      (set-box! task-box (append (task-box-contents (unbox task-box)) (list task)))
+      (fprintf (current-error-port) 
+               "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)))
 
 
   (define (dequeue-task! task-box) ;null? checking happens in (parallel)
-    (let ([tasks (unbox task-box)])
+    (let ([tasks (task-box-contents (unbox task-box))])
       (let ([task (car tasks)])
         (set-box! task-box (cdr tasks))
         task)))
@@ -170,68 +184,72 @@
       (immutable empty?))
     (protocol
       (lambda (new)
-        (let* ([data '()]
-               [id (incrementor)])
-          (lambda () (new 
-                       data
-                       id
-                       (lambda () ;default get!
-                         (define (loop)
-                           (if (null? data)
-                               (let ()
-                                 (set-block! id #t)
-                                 (engine-block)
-                                 (loop))
-                               (let ([ret (car data)])
-                                 (set! data (cdr data)))))
-                         (loop))
-                       (lambda (val) ;default put!
-                         (set! data (append data (list val)))
-                         (append-non-empty! id))
-                       (lambda () (null? data)))))))) ;default empty?
+        [id (incrementor)])
+      (case-lambda 
+        [(data get! put! empty!)
+         (new data id get! put! empty?)]
+        [() 
+         (let ([data '()]
+                 (new 
+                   data
+                   id
+                   (lambda () ;default get!
+                     (define (loop)
+                       (if (null? data)
+                         (let ()
+                           (set-block! id #t)
+                           (engine-block)
+                           (loop))
+                         (let ([ret (car data)])
+                           (set! data (cdr data)))))
+                     (loop))
+                   (lambda (val) ;default put!
+                     (set! data (append data (list val)))
+                     (append-non-empty! id))
+                   (lambda () (null? data)))))]))) ;default empty?
 
 
   ;execute tasks in task-box in parallel
-  (define (parallel task-box)
+  (define (parallel tb)
+    (if (task-box? tb)
+      ;temporarily assign new values for global variables
+      (fluid-let 
+        ([*CHANNEL-BLOCK-FLAG* #f]
+         [*CHANNEL-BLOCK-ID* 0]
+         [*CHANNEL-NON-EMPTY-FLAG* #f]
+         [*CHANNEL-NON-EMPTY-IDS* 0])
 
-    ;temporarily assign new values for global variables
-    (fluid-let 
-      ([*CHANNEL-BLOCK-FLAG* #f]
-       [*CHANNEL-BLOCK-ID* 0]
-       [*CHANNEL-NON-EMPTY-FLAG* #f]
-       [*CHANNEL-NON-EMPTY-IDS* 0])
+        ;list of waiting tasks
+        (define waiting-tasks '())
 
-      ;list of waiting tasks
-      (define waiting-tasks '())
+        (define (enqueue-waiting-task! task)
+          (set! waiting-tasks (append waiting-tasks 
+                                      (list *CHANNEL-BLOCK-ID* task)))
+          (set-block! 0 #f))
 
-      (define (enqueue-waiting-task! task)
-        (set! waiting-tasks (append waiting-tasks 
-                                    (list *CHANNEL-BLOCK-ID* task)))
-        (set-block! 0 #f))
-
-      ;enqueue any tasks waiting for now non-empty channel id
-      (define (enqueue-tasks-waiting-for-id! id)
-        (define (loop waiting)
-          (if (null? waiting)
+        ;enqueue any tasks waiting for now non-empty channel id
+        (define (enqueue-tasks-waiting-for-id! id)
+          (define (loop waiting)
+            (if (null? waiting)
               '()
               (let ([cur (car waiting)])
                 (when (eqv? id (car cur))
-                  (enqueue-task! task-box (cadr cur))
+                  (enqueue-task! tb (cadr cur))
                   (set! waiting-tasks (remv cur waiting-tasks)))
                 (loop (cdr waiting)))))
-        (loop waiting-tasks))
+          (loop waiting-tasks))
 
-      ;handle all now non-empty channel ids
-      (define (enqueue-waiting-tasks!)
-        (map enqueue-waiting-tasks! *CHANNEL-NON-EMPTY-IDS*)
-        (set! *CHANNEL-NON-EMPTY-FLAG* #f)
-        (set! *CHANNEL-NON-EMPTY-IDS* '()))
+        ;handle all now non-empty channel ids
+        (define (enqueue-waiting-tasks!)
+          (map enqueue-waiting-tasks! *CHANNEL-NON-EMPTY-IDS*)
+          (set! *CHANNEL-NON-EMPTY-FLAG* #f)
+          (set! *CHANNEL-NON-EMPTY-IDS* '()))
 
-      ;execute tasks in parallel
-      (define (exec-tasks task-box results)
-        (if (null? (unbox task-box))
+        ;execute tasks in parallel
+        (define (exec-tasks tb results)
+          (if (null? (tax-box-contents (unbox tb)))
             results
-            (let ([task (dequeue-task! task-box)])
+            (let ([task (dequeue-task! tb)])
               (let ([fuel (task-fuel task)])
                 (let ([engine-ret ((task-engine task)
                                    fuel
@@ -239,65 +257,34 @@
                                    (lambda (new-engine) '(#f new-engine)))])
                   (when *CHANNEL-NON-EMPTY-FLAG* (enqueue-waiting-tasks!))
                   (if (car engine-ret)
-                      (exec-tasks task-box (append results (list (cadr engine-ret))))
-                      (let ()
-                        (if *CHANNEL-BLOCK-FLAG* 
-                            (enqueue-waiting-task! (make-task (cadr engine-ret) fuel))
-                            (enqueue-task! task-box (make-task (cadr engine-ret) fuel #t)))
-                        (exec-tasks task-box results))))))))
-      (exec-tasks task-box '())))
+                    (exec-tasks tb (append results (list (cadr engine-ret))))
+                    (let ()
+                      (if *CHANNEL-BLOCK-FLAG* 
+                        (enqueue-waiting-task! (make-task (cadr engine-ret) fuel))
+                        (enqueue-task! tb (make-task (cadr engine-ret) fuel #t)))
+                      (exec-tasks tb results))))))))
+        (exec-tasks tb '()))
+      (let ()
+        (fprintf 
+          (current-error-port) 
+          "[error: parallel] provided task-box argument ~a is not a task-box record\n" 
+          tb))))
 
 
   (define-record-type 
     task-manager 
     (fields
-      ;some kind of communication object of arbitrary implementation: queue, 
-      ;channel, etc. Further tasks/thunks to evaluate are gathered here. 
-      ;managed-parallel ends collecting tasks when a #f is received from this 
-      ;object
-      (mutable input-source) 
-
-      ;function that takes one argument (input-source) and blocks 
-      ;if nothing available to return, otherwise returns obtained value
-      (immutable get-block!) 
-
-      ;returns #t if at least one value ready to be gathered from get-block!,
-      ;otherwise returns #f
-      (immutable empty?)
+      (mutable input-parallel-channel) 
 
       ;DISABLE FUNCTIONALITY BY PROVIDING #f AS INPUT
-      ;A function that takes one argument. Output from this function 
-      ;is placed in the task-box with enqueue-task! Pass #f to this field if 
-      ;this functionality is not desired 
-      ;
-      ;This is useful when input from input-source does not come in the form 
-      ;of an executable task, and must be interpreted (for instance, when 
-      ;input-source is a cross-process communication queue).
-      (immutable input-manager)
+      (mutable output-parallel-channel)
 
       ;DISABLE FUNCTIONALITY BY PROVIDING #f AS INPUT
-      ;The following fields are not required to be provided as function 
-      ;arguments. However, both must be absent or provided together, record 
-      ;creation will fail if only one field is given
-
-      ;DISABLE FUNCTIONALITY BY PROVIDING #f AS INPUT
-      ;Some kind of communication object of arbitrary implementation: 
-      ;queue, channel, etc. Results from thunk execution are placed here 
-      ;when parallel internally returns a batch of results. 
-      ;
-      ;If a more asynchronous solution is required, simply have your tasks 
-      ;return their results internally to your communication object. This is 
-      ;threadsafe because parallel doesn't use threads!
-      (mutable result-destination) 
-
-      ;function that puts a value into a communication object. If 
-      ;this operation does not block, may lose computation results, but is up 
-      ;to implementation 
-      (immutable put!)) 
+      (immutable input-manager))
     (protocol 
       (lambda (new)
-        (lambda (input-source get-block! empty? input-manager result-destination put!)
-          (new input-source get-block! empty? input-manager result-destination put!)))))
+        (lambda (input-parallel-channel output-parallel-channel input-manager)
+          (new input-parallel-channel output-parallel-channel input-manager)))))
 
 
   ;Same as (parallel) except it can continuously take new input from outside 
@@ -309,10 +296,10 @@
       (let ([collecting #t]
             [input-source (task-manager-input-source task-manager)]
             [input-manager (task-manager-input-manager task-manager)]
-            [result-destination (task-manager-result-destination task-manager)]
-            [get-block! (task-manager-get-block! task-manager)]
-            [empty? (task-manager-empty? task-manager)]
-            [put! (task-manager-put! task-manager)])
+            [result-destination (parallel-channel-data (task-manager-output-parallel-channel task-manager))]
+            [get-block! (parallel-channel-get-block! (task-manager-input-parallel-channel task-manager))]
+            [empty? (parallel-channel-get-empty? (task-manager-input-parallel-channel task-manager))]
+            [put! (parallel-channel-put! (task-manager-output-parallel-channel task-manager))])
 
         ;;---------------------------------------------------------------------
         ;;DEFINITIONS
@@ -321,30 +308,30 @@
         ;managed-parallel
         (define (handle-input! input)
           (if input 
-              (if input-manager 
-                  (let ([processed-input (input-manager input)])
-                    (when processed-input
-                      (enqueue-task! task-box (input-manager input))))
-                  (enqueue-task! task-box input))
-              (set! collecting #f)))
+            (if input-manager 
+              (let ([processed-input (input-manager input)])
+                (when (task? processed-input)
+                  (enqueue-task! task-box processed-input)))
+              (enqueue-task! task-box input))
+            (set! collecting #f)))
 
         ;attempt to get input and put input into task-box. If no input found 
         ;and task-box empty, block. 
         (define (get-input block)
           (if collecting
-              (let ([input (if (empty? input-source)
-                               '()
-                               (get-block! input-source))])
-                (if (null? input)
-                    (if (and (null? (unbox task-box)) block)
-                        (let ()
-                          (handle-input! (get-block! input-source))
-                          (get-input block))
-                        '())
-                    (let ()
-                      (handle-input! input)
-                      (get-input block))))
-              '()))
+            (let ([input (if (empty? input-source)
+                           '()
+                           (get-block! input-source))])
+              (if (null? input)
+                (if (and (null? (unbox task-box)) block)
+                  (let ()
+                    (handle-input! (get-block! input-source))
+                    (get-input block))
+                  '())
+                (let ()
+                  (handle-input! input)
+                  (get-input block))))
+            '()))
 
 
         ;Re-enqueueing task that attempts to get more input unless no 
@@ -357,8 +344,8 @@
         ;function to handle results of parallel
         (define (put-results results)
           (if (and result-destination put!)
-              (put! result-destination results)
-              '()))
+            (put! result-destination results)
+            '()))
 
         ;;---------------------------------------------------------------------
         ;;EXECUTION
@@ -373,9 +360,15 @@
 
         ;If still collecting, recurse this function
         (if collecting
-            (let ()
-              ;Attempt to get more input (blocking if no input and no tasks)
-              (get-input #t)
-              (run))
-            #t)))
-    (run)))
+          (let ()
+            ;Attempt to get more input (blocking if no input and no tasks)
+            (get-input #t)
+            (run))
+          #t)))
+    (if (task-box? tb)
+      (run)
+      (let ()
+        (fprintf 
+          (current-error-port) 
+          "[error: managed-parallel] provided task-box argument ~a is not a task-box record\n" 
+          tb)))))
