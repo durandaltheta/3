@@ -26,11 +26,11 @@
   (define *cur-test-section* "")
 
   ;Print test divider
-  (define (print-test-divider char)
+  (define (print-test-divider char limit)
     (if (string? char)
       (let ()
         (do ([i 0 (+ i 1)])
-          ((>= i 80) '())
+          ((>= i limit) '())
           (printf "~a" char))
         (printf "\n"))))
 
@@ -71,16 +71,23 @@
     (printf "Number of test failures: ~a\n\n" *num-fails*)
     (printf "Failed tests:\n")
     (iter-tests *failed-tests*)
-    (printf "\n\n")
+    (printf "\n")
     (reset-test-results))
 
   ;; PUBLIC API
   ;Designate & print current test section with description
-  (define (test-section name)
-    (set! *cur-test-section* name)
-    (print-test-divider "#")
-    (printf "### test-section ~a\n" name)
-    (print-test-divider "#"))
+  (define test-section 
+    (let ()
+      (define (intern name char num)
+        (set! *cur-test-section* name)
+        (printf "\n")
+        (print-test-divider char num)
+        (printf "### test-section ~a\n" name)
+        (print-test-divider char num))
+      (case-lambda
+        [(name) (intern name "#" 80)]
+        [(name char) (intern name char 80)]
+        [(name char num) (intern name char num)])))
 
   ;; PUBLIC API
   ;; Return #t if the quoted form returns #t, else #f 
@@ -127,17 +134,18 @@
                 (collate-test ret))))
           (let ([o (open-output-string)])
             (fprintf o "FAIL TEST ~a ~a: ~a != ~a\n" (get-test-num) description form-a form-b)
-            (when print-result
-              (printf (get-output-string o))
-              (when wait
-                (let ()
-                  (printf "<enter to continue>")
-                  (read))))
-            (let ([ret (cons #f (get-output-string o))])
-              (collate-test ret))))
+            (let ([str (get-output-string o)])
+              (when print-result
+                (printf str)
+                (when wait
+                  (let ()
+                    (printf "<enter to continue>")
+                    (get-char (current-input-port)))))
+              (let ([ret (cons #f str)])
+                (collate-test ret)))))
         (values))
       (case-lambda 
-        [(description a b) (run description a b #f #f)]
+        [(description a b) (run description a b #t #f)]
         [(description a b print-result) (run description a b print-result #f)]
         [(description a b print-result wait) (run description a b print-result wait)])))
 
@@ -149,17 +157,18 @@
       (define (run description form print-result wait)
         (let ([o (open-output-string)])
           (fprintf o "FAIL TEST ~a ~a: ~a\n" (get-test-num) description form)
-          (when print-result
-            (printf (get-output-string o))
-            (when wait
-              (let ()
-                (printf "<enter to continue>")
-                (read))))
-          (let ([ret (cons #f (get-output-string o))])
-            (collate-test ret)))
+          (let ([str (get-output-string o)])
+            (when print-result
+              (printf str)
+              (when wait
+                (let ()
+                  (printf "<enter to continue>")
+                  (get-char (current-input-port)))))
+            (let ([ret (cons #f str)])
+              (collate-test ret))))
         (values))
       (case-lambda 
-        [(description form) (run description form #f #f)]
+        [(description form) (run description form #t #f)]
         [(description form print-result) (run description form print-result #f)]
         [(description form print-result wait) (run description form print-result wait)])))
 
@@ -178,5 +187,5 @@
               (collate-test ret))))
         (values))
       (case-lambda
-        [(description form) (run description form #f)]
+        [(description form) (run description form #t)]
         [(description form print-result) (run description form print-result)]))))
