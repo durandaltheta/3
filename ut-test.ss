@@ -1,12 +1,12 @@
-(library
-  (ut-test)
-  (export run-ut-test)
-  (import (chezscheme)
-          (test))
+#! /usr/bin/scheme --script
+(let ()
+  (import (chezscheme) (test))
 
   (define (ut-test-section)
     (test-section "ut-test-section-1")
-    (test-section "ut-test-section-2"))
+    (print-test-report)
+    (test-section "ut-test-section-2")
+    (print-test-report))
 
   (define (ut-test-true?)
     (test-section "ut-test-true?")
@@ -17,10 +17,12 @@
     (test-true? "boolean value case 3" #t #t #t)
     (test-true? "boolean value case 3-2" #t #t #f)
     (test-true? "boolean value case 3-3" #f #t #t)
-    (test-true? "boolean value case 3-4" #f #t #f))
+    (test-true? "boolean value case 3-4" #f #t #f)
+    (print-test-report))
 
   (define (ut-test-equal?)
     (test-section "ut-test-equal?")
+    (print-test-report)
 
     )
 
@@ -35,6 +37,5 @@
 
   (define (run-ut-test)
     (ut-test-section)
-    (ut-test-true?)))
-
-
+    (ut-test-true?))
+  (run-ut-test))
