@@ -77,16 +77,23 @@
     ;Will not return if any tasks are blocking via parallel-channel-get!
     parallel  
 
-    ;  (go task-or-thunk) -> void
-    ;Enqueues a thunk or task record to be executed and starts parallel if 
-    ;it is not already running. 
-    ;
-    ;(go) is special because it uses a global task box managed in the
-    ;background. This is the easiest way to run tasks asynchronously. As a note,
+    ;  (go thunk) -> void
+    ;  (go thunk fueld) -> void
+    ;Enqueues a thunk to be executed. (go) is special because it uses a global 
+    ;task box managed in the background. This is the easiest way to run tasks 
+    ;asynchronously. As a note these tasks will not be executed unless 
+    ;(start) is called.
+    go
+
+    ;  (start) -> list-of-task-results
+    ;starts parallel if  it is not already running. As a note,
     ;if parallel is *not* running, this function will block until parallel
     ;returns. However, any (go) function executed by a running task will *NOT*
     ;block, therefore this is safe to use within any task started by (go).
-    go) 
+    ;
+    ;Normal usage is to queue up some tasks with (go), then execute (start). 
+    ;Any (go) calls used within the queued tasks will also execute.
+    start)
   (import (chezscheme)) 
 
   (define (raise-error msg)
@@ -364,15 +371,23 @@
   ;PUBLIC API
   ;  (go thunk) -> void
   ;  (go thunk fuel) -> void
-  ;enqueue a thunk to be executed, started parallel execution if not already 
-  ;running
+  ;enqueue a thunk to be executed in a background taskbox
   (define go
-    (let ()
-      (define (intern task)
-        (enqueue-task! *default-task-box* (make-task task))
-        (if (not (task-box-running *default-task-box*))
-          (parallel *default-task-box*))
-        (values))
-      (case-lambda
-        [(thunk) (intern (make-task thunk))]
-        [(thunk fuel) (intern (make-task thunk fuel))]))))
+    (case-lambda
+      [(thunk) (enqueue-task! *default-task-box* (make-task thunk))]
+      [(thunk fuel) (enqueue-task! *default-task-box* (make-task thunk fuel))]))
+
+  ;PUBLIC API
+  ;  (start) -> list-of-task-results
+  ;This must be called before (go) calls will begin executing 
+  ;
+  ;Example Usage:
+  ;  (go thunk1)
+  ;  (go thunk2)
+  ;  (start) ;(go) calls made by thunk1 or thunk2 will also execute asynchronously
+  (define (start)
+    (if (not (task-box-running *default-task-box*))
+        (parallel *default-task-box*)
+        '())))
+  
+  
