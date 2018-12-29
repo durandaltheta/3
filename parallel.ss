@@ -74,7 +74,12 @@
     ;execute all tasks contained in given task-box asynchronously before 
     ;returning all task return values as a list in the order completed. 
     ;
-    ;Will not return if any tasks are blocking via parallel-channel-get!
+    ;WARNINGS:
+    ;- Will not return if any tasks are blocking via parallel-channel-get!
+    ;- Do *not* use (set-timer) inside a task, will break implementation
+    ;- To make modification of shared memory safe, invoke (set-unsafe!). This 
+    ;  forces parallel to execute linearly. Use (set-safe!) to restore normal
+    ;  asynchronous execution.
     parallel  
 
     ;  (go thunk) -> void
@@ -146,24 +151,24 @@
                 (new (box '()) '() #f))))))))
 
 
-  (define (enqueue-task! task-box task)
+  (define (enqueue-task! tb task)
     (if (task? task)
-      (set-box! task-box (append (task-box-contents (unbox task-box)) (list task)))
+      (set-box! (task-box-contents tb) (append (unbox (task-box-contents tb)) (list task)))
       (let ([o (open-output-string)])
         (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
         (raise-error (get-output-string o)))))
 
 
-  (define (dequeue-task! task-box) ;null? checking happens in (parallel)
-    (let ([tasks (task-box-contents (unbox task-box))])
+  (define (dequeue-task! tb) ;null? checking happens in (parallel)
+    (let ([tasks (unbox (task-box-contents tb))])
       (let ([task (car tasks)])
-        (set-box! task-box (cdr tasks))
+        (set-box! (task-box-contents tb) (cdr tasks))
         task)))
 
 
-  (define (enqueue-task-as-head! task-box task)
+  (define (enqueue-task-as-head! tb task)
     (if (task? task)
-      (set-box! task-box (append (list task) (task-box-contents (unbox task-box))))
+      (set-box! (task-box-contents tb) (append (list task) (unbox (task-box-contents tb))))
       (let ([o (open-output-string)])
         (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
         (raise-error (get-output-string o)))))
@@ -340,10 +345,10 @@
               (let ([fuel (task-fuel task)])
                 (let ([engine-ret ((task-engine task)
                                    fuel
-                                   (lambda (fuel ret-vals) '(#t ret-vals))
-                                   (lambda (new-engine) '(#f new-engine)))])
+                                   (lambda (fuel ret-vals) (list #t ret-vals))
+                                   (lambda (new-engine) (list #f new-engine)))])
                   (if (car engine-ret)
-                    (exec-tasks tb (append results (list (cadr engine-ret))))
+                      (exec-tasks tb (append results (list (cadr engine-ret))))
                     (let ()
                       (if (unsafe?) 
                         ;if execution is set to unsafe mode continue execution
@@ -388,6 +393,4 @@
   (define (start)
     (if (not (task-box-running *default-task-box*))
         (parallel *default-task-box*)
-        '())))
-  
-  
+        '()))) 
