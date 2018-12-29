@@ -27,13 +27,14 @@
     enqueue-task!
 
     ;  (set-unsafe!) -> void
-    ;When this mode is active it forces (parallel) execute linearly (disables 
-    ;asynchronous execution). This makes modification to shared/global values 
-    ;between tasks safe. parallel-channels use these internally.
+    ;When this mode is active it forces (parallel) to execute linearly 
+    ;(disables asynchronous execution). This makes modification to 
+    ;shared/global values safe. parallel-channels use these internally.
     set-unsafe!
 
     ;  (set-safe!) -> void
-    ;Enable parallel execution in (parallel)
+    ;Enable parallel execution in (parallel). This is #t by default and only 
+    ;set #f when (set-unsafe!) is called.
     set-safe!
 
     ;Returns #t if in unsafe mode, otherwise #f
@@ -57,19 +58,17 @@
     ;  empty? : returns #t if object is empty, else #f
     make-parallel-channel 
 
-    ;  (parallel-channel-empty? parallel-channel) -> (->) -> boolean 
-    ;  Returns a function that returns #t if values are waiting in the channel 
-    ;  otherwise returns false.
-    parallel-channel-empty? 
+    ;  (ch-get parallel-channel) -> any
+    ;Get value from parallel channel
+    ch-get!
 
-    ;  (parallel-channel-put! ch any) -> (-> any) -> void
-    ;  Returns a function that will accept a value and place it into the 
-    ;  parallel-channel.
-    parallel-channel-put! 
+    ;  (ch-put parallel-channel any) -> void
+    ;Put a value into a parallel-channel
+    ch-put!
 
-    ;  (parallel-channel-get! ch) -> (->) -> any
-    ;  Returns a function that will return a value from the parallel-channel.
-    parallel-channel-get! ;blocks till data available
+    ;  (ch-empty? parallel-channel) -> boolean
+    ;Returns #t if channel is empty, else returns #f
+    ch-empty?
 
     ;  (parallel task-box) -> list-of-task-results 
     ;execute all tasks contained in given task-box asynchronously before 
@@ -90,8 +89,13 @@
     go) 
   (import (chezscheme)) 
 
+  (define (raise-error msg)
+    (raise
+      (condition
+        (make-error)
+        (make-message-condition msg))))
+
   (define *default-engine-fuel* 50)
-  (define *default-task-box* (make-task-box '()))
 
   (define-record-type
     task
@@ -125,20 +129,22 @@
 
           (let ([res (validate-task-list task-list)])
             (if (car res)
-              (new (box task-list) #f)
-              (let ()
-                (fprintf (current-error-port) 
-                         "[error make-task-box] provided task ~a is not a task record, in task list: ~a\n" 
+              (new (box task-list) '() #f)
+              (let ([o (open-output-string)])
+                (fprintf o
+                         "[make-task-box] provided task ~a is not a task record, in task list: ~a\n" 
                          (cadr res) 
                          task-list)
-                (new (box '()) #f))))))))
+                (raise-error (get-output-string o))
+                (new (box '()) '() #f))))))))
 
 
   (define (enqueue-task! task-box task)
     (if (task? task)
       (set-box! task-box (append (task-box-contents (unbox task-box)) (list task)))
-      (fprintf (current-error-port) 
-               "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)))
+      (let ([o (open-output-string)])
+        (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
+        (raise-error (get-output-string o)))))
 
 
   (define (dequeue-task! task-box) ;null? checking happens in (parallel)
@@ -147,11 +153,14 @@
         (set-box! task-box (cdr tasks))
         task)))
 
+
   (define (enqueue-task-as-head! task-box task)
     (if (task? task)
       (set-box! task-box (append (list task) (task-box-contents (unbox task-box))))
-      (fprintf (current-error-port) 
-               "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)))
+      (let ([o (open-output-string)])
+        (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
+        (raise-error (get-output-string o)))))
+
 
   ;global task timeout 'mutex'
   (define *UNSAFE-TIMEOUT* #f)
@@ -160,7 +169,7 @@
   (define (unsafe?) *UNSAFE-TIMEOUT*)
 
 
-  ;global placeholders
+  ;global channel flags and lists
   (define *CHANNEL-BLOCK-FLAG* #f)
   (define *CHANNEL-BLOCK-ID* 0)
   (define *CHANNEL-NON-EMPTY-FLAG* #f)
@@ -176,7 +185,7 @@
     (set-unsafe!)
     (set! *CHANNEL-NON-EMPTY-IDS* (append *CHANNEL-NON-EMPTY-IDS* (list val)))
     (set! *CHANNEL-NON-EMPTY-FLAG* #t)
-    (set-safe))
+    (set-safe!))
 
   ;function that always emits a unique numerical value per invocation
   (define incrementor (let ([id 0]) 
@@ -184,6 +193,10 @@
                                      (set! id (+ id 1)) 
                                      ret))))
 
+  ;record that contains threadsafe data passing functions. Can be created 
+  ;without arguments to create a default record OR with custom communication 
+  ;object and blocking-get!, put!, and empty? functions that operate on said 
+  ;communication object.
   (define-record-type
     parallel-channel
     (fields 
@@ -194,49 +207,81 @@
       (immutable empty?))
     (protocol
       (lambda (new)
-        [id (incrementor)])
-      (case-lambda 
-        [(data get! put! empty?) ;custom parallel-channel case
-         (lambda (data get! put! empty?)
-           (new 
-             data 
-             id 
+        (let ([id (incrementor)])
+          (case-lambda 
+            [(data get! put! empty?) ;custom parallel-channel case
+             (lambda (data get! put! empty?)
+               (new 
+                 data 
+                 id 
+                 (lambda () ;custom get!
+                   (define (loop)
+                     (if (empty? data)
+                       (let ()
+                         (set-block! id #t)
+                         (engine-block)
+                         (loop))
+                       (get! data)))
+                   (loop))
+                 (lambda (val) ;custom put!
+                   (put! data val)
+                   (append-non-empty-channel-id! id))
+                 empty?))] ;custom empty?
+            [() ;default parallel-channel case
              (lambda ()
-               (define (loop)
-                 (if (empty? data)
-                   (let ()
-                     (set-block! id #t)
-                     (engine-block)
-                     (loop))
-                   (get! data)))
-               (loop))
-             (lambda (val)
-               (put! data val)
-               (append-non-empty-channel-id! id))
-             empty?))]
-        [() ;default parallel-channel case
-         (lambda ()
-           (let ([data '()]
-                 (new 
-                   data
-                   id
-                   (lambda () ;default get!
-                     (define (loop)
-                       (if (null? data)
-                         (let ()
-                           (set-block! id #t)
-                           (engine-block)
-                           (loop))
-                         (let ([ret (car data)])
-                           (set! data (cdr data))
-                           ret)))
-                     (loop))
-                   (lambda (val) ;default put!
-                     (set! data (append data (list val)))
-                     (append-non-empty-channel-id! id))
-                   (lambda () (null? data))))))]))) ;default empty?
+               (let ([data '()])
+                     (new 
+                       data
+                       id
+                       (lambda () ;default get!
+                         (define (loop)
+                           (if (null? data)
+                             (let ()
+                               (set-block! id #t)
+                               (engine-block)
+                               (loop))
+                             (let ([ret (car data)])
+                               (set! data (cdr data))
+                               ret)))
+                         (loop))
+                       (lambda (val) ;default put!
+                         (set! data (append data (list val)))
+                         (append-non-empty-channel-id! id))
+                       (lambda () (null? data)))))]))))) ;default empty?
+
+  ;PUBLIC API
+  ;  (ch-get! ch) -> any
+  (define (ch-get! ch)
+    (if (parallel-channel? ch)
+      ((parallel-channel-get! ch))
+      (let ([o (open-output-string)])
+        (fprintf o "[ch-get!] provided ch ~a is not a parallel-channel record\n" ch)
+        (raise-error (get-output-string o))
+        (values))))
+
+  ;PUBLIC API
+  ;  (ch-put! ch val) -> void
+  (define (ch-put! ch val)
+    (if (parallel-channel? ch)
+      ((parallel-channel-put! ch) val)
+      (let ([o (open-output-string)])
+        (fprintf o "[ch-put!] provided ch ~a is not a parallel-channel record\n" ch)
+        (raise-error (get-output-string o))
+        (values))))
+
+  ;PUBLIC API
+  ;  (ch-empty? ch) -> boolean
+  (define (ch-empty? ch)
+    (if (parallel-channel? ch)
+      ((parallel-channel-empty? ch))
+      (let ([o (open-output-string)])
+        (fprintf o "[ch-empty?] provided ch ~a is not a parallel-channel record\n" ch)
+        (raise-error (get-output-string o))
+        (values))))
 
 
+  ;PUBLIC API
+  ;  (parallel tb) -> list-of-results
   ;execute tasks in task-box in parallel
   (define (parallel tb)
     (if (task-box? tb)
@@ -250,7 +295,7 @@
         ;enqueue a task that's blocked waiting for input from a 
         ;parallel-channel
         (define (enqueue-waiting-task! task)
-          (task-box-waiting-set! (append (task-box-waiting tb) (list *CHANNEL-BLOCK-ID* task)))
+          (task-box-waiting-set! tb (append (task-box-waiting tb) (list *CHANNEL-BLOCK-ID* task)))
           (set-block! 0 #f))
 
         ;execute any tasks waiting for now non-empty parallel-channel id, 
@@ -265,7 +310,7 @@
                     (enqueue-task! tb (cadr cur))
                     (loop (cdr waiting) parsed))
                   (loop (cdr waiting) (append parsed (car waiting)))))))
-          (task-box-waiting-set! (loop (task-box-waiting tb))))
+          (task-box-waiting-set! tb (loop (task-box-waiting tb) '())))
 
         ;handle all now non-empty channel ids
         (define (enqueue-waiting-tasks!)
@@ -278,11 +323,11 @@
           ;if channels have new values, enqueue waiting tasks for that channel 
           ;id
           (when *CHANNEL-NON-EMPTY-FLAG* (enqueue-waiting-tasks!))
-          (if (null? (unbox (tax-box-contents tb)))
-            (if (null? (tax-box-waiting tb))
+          (if (null? (unbox (task-box-contents tb)))
+            (if (null? (task-box-waiting tb))
               results
               (let ()
-                (sleep (make-time 10000000))
+                (sleep (make-time 'time-duration 10000000 0))
                 (exec-tasks tb results)))
             (let ([task (dequeue-task! tb)])
               (let ([fuel (task-fuel task)])
@@ -297,7 +342,7 @@
                         ;if execution is set to unsafe mode continue execution
                         ;linearly until safe to execute in parallel
                         (let ()
-                          (enqueue-task-as-head! (make-task (cadr engine-ret) fuel #t))
+                          (enqueue-task-as-head! tb (make-task (cadr engine-ret) fuel #t))
                           (exec-tasks tb results))
                         (let ()
                           ;if task is blocked on a parallel-channel get!
@@ -310,18 +355,24 @@
         (let ([ret (exec-tasks tb '())])
           (task-box-running-set! tb #f)
           ret))
-      (let ()
-        (fprintf 
-          (current-error-port) 
-          "[error: parallel] provided task-box argument ~a is not a task-box record\n" 
-          tb))))
+      (let ([o (open-output-string)])
+        (fprintf o "[parallel] provided task-box argument ~a is not a task-box record\n" tb)
+        (raise-error (get-output-string o)))))
 
+  (define *default-task-box* (make-task-box '()))
+
+  ;PUBLIC API
+  ;  (go thunk) -> void
+  ;  (go thunk fuel) -> void
+  ;enqueue a thunk to be executed, started parallel execution if not already 
+  ;running
   (define go
     (let ()
       (define (intern task)
-        (enqueue-task! *default-task-box* (make-task thunk))
-        (when (not (task-box-running *default-task-box*))
-          (parallel *default-task-box*)))
+        (enqueue-task! *default-task-box* (make-task task))
+        (if (not (task-box-running *default-task-box*))
+          (parallel *default-task-box*))
+        (values))
       (case-lambda
         [(thunk) (intern (make-task thunk))]
-        [(thunk-fuel) (intern (make-task thunk fuel))]))))
+        [(thunk fuel) (intern (make-task thunk fuel))]))))
