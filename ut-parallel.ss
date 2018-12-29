@@ -6,18 +6,13 @@
   (define w #f)
 
     #|
-    ;tests:
-    task?
-    make-task-box 
     enqueue-task!
     parallel  
+    go
     make-parallel-channel 
     parallel-channel-empty? 
     parallel-channel-put! 
     parallel-channel-get! 
-    make-task-manager 
-    task-manager? 
-    managed-parallel
     |# 
   (define (ut-task?)
     (test-section "make-task")
@@ -26,11 +21,18 @@
           [test-thunk (lambda () 3)])
       (test-true? "Make sure our task is a task record" (task? test-task) pr w)
       (test-true? "Make sure our thunk is not a task" (not (task? test-thunk)) pr w)))
+
+  (define (ut-make-task-box)
+    )
+
+  (define (ut-task-box?)
+    )
     
   (define (run-ut-parallel print-result wait)
     (set! pr print-result)
     (set! w wait)
     (ut-task?)
-    (print-test-report))
+    (ut-make-task-box)
+    (ut-task-box?))
  
   (run-ut-parallel #t #f))
