@@ -5,16 +5,6 @@
   (define pr #f)
   (define w #f)
 
-  #|
-  make-parallel-channel 
-  parallel-channel-empty? 
-  parallel-channel-put! 
-  parallel-channel-get! 
-  practical-channel-parallel
-  practical-channel-start-go
-  practical-use-case
-  |# 
-
   ;****************************************************************************
   (define (ut-task?)
     (let ([test-task (make-task (lambda () 3))]
@@ -74,9 +64,56 @@
     (go (lambda () 2))
     (let ([res (start)])
       (test-equal? "expected result 3" (car res) 1 pr w)
-      (test-equal? "expected result 4" (car res) 2 pr w)
-      (test-equal? "expected result 5" (car res) 3 pr w)))
+      (test-equal? "expected result 4" (cadr res) 2 pr w)
+      (test-equal? "expected result 5" (caddr res) 3 pr w)))
 
+  ;****************************************************************************
+  (define (ut-parallel-channel)
+    (test-section "parallel-channel")
+
+    (let ([ch (make-parallel-channel)])
+      (test-true? "did we make a parallel-channel?" (parallel-channel? ch) pr w)
+
+      (ch-put! ch 'test)
+
+      (test-equal? "did our put! and get! succeed?" 'test (ch-get! ch) pr w)
+
+      (ch-put! ch 3)
+      (ch-put! ch "test")
+
+      (test-true? "make sure the channel is not empty" (not (ch-empty? ch)) pr w)
+      (test-equal? "did our 2nd put! and get! succeed?" 3 (ch-get! ch) pr w)
+      (test-equal? "did our 3rd put! and get! succeed?" "test" (ch-get! ch) pr w)
+      (test-true? "make sure the channel is empty" (ch-empty? ch) pr w))
+
+    (let ([ch1 (make-parallel-channel)]
+          [ch2 (make-parallel-channel)])
+      
+      (define (catch-pass who in-ch out-ch count limit)
+                         (let ([ball (ch-get! in-ch)])
+                           (if (< count limit)
+                             (let ()
+                               (printf "~a passes the ball!\n" who)
+                               (ch-put! out-ch ball)
+                               (catch-pass who (+ count 1) limit))
+                             who)))
+
+      (go (lambda () (catch-pass "thunk1" ch1 ch2 0 10)))
+      (go (lambda () (catch-pass "thunk2" ch2 ch1 0 10)))
+      (ch-put! ch1 'ball)
+      (printf "\n")
+
+      (let ([res (start)])
+        (printf "\n")
+        (test-equal? "should be thunk1" "thunk1" (car res) pr w)
+        (test-equal? "should be thunk2" "thunk2" (cadr res) pr w))))
+
+  #|
+  practical-channel-parallel
+  practical-channel-start-go
+  practical-use-case
+  |# 
+  
   ;****************************************************************************
   (define (run-ut-parallel print-result wait)
     (set! pr print-result)
@@ -85,6 +122,7 @@
     (ut-task-box?)
     (ut-parallel)
     (ut-start-go)
+    (ut-parallel-channel)
     (print-test-report))
 
   (run-ut-parallel #t #f))

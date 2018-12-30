@@ -58,6 +58,10 @@
     ;  empty? : returns #t if object is empty, else #f
     make-parallel-channel 
 
+    ;  (parallel-channel? a) -> boolean
+    ;returns #t if argument a is a parallel-channel, else returns #f
+    parallel-channel?
+
     ;  (ch-get parallel-channel) -> any
     ;Get value from parallel channel
     ch-get!
@@ -187,6 +191,7 @@
   (define *CHANNEL-NON-EMPTY-FLAG* #f)
   (define *CHANNEL-NON-EMPTY-IDS* '())
 
+
   (define (set-block! val bool)
     (set-unsafe!)
     (set! *CHANNEL-BLOCK-ID* val)
@@ -222,44 +227,42 @@
         (let ([id (incrementor)])
           (case-lambda 
             [(data get! put! empty?) ;custom parallel-channel case
-             (lambda (data get! put! empty?)
+             (new 
+               data 
+               id 
+               (lambda () ;custom get!
+                 (define (loop)
+                   (if (empty? data)
+                     (let ()
+                       (set-block! id #t)
+                       (engine-block)
+                       (loop))
+                     (get! data)))
+                 (loop))
+               (lambda (val) ;custom put!
+                 (put! data val)
+                 (append-non-empty-channel-id! id))
+               empty?)] ;custom empty?
+            [() ;default parallel-channel case
+             (let ([data '()])
                (new 
-                 data 
-                 id 
-                 (lambda () ;custom get!
+                 data
+                 id
+                 (lambda () ;default get!
                    (define (loop)
-                     (if (empty? data)
+                     (if (null? data)
                        (let ()
                          (set-block! id #t)
                          (engine-block)
                          (loop))
-                       (get! data)))
+                       (let ([ret (car data)])
+                         (set! data (cdr data))
+                         ret)))
                    (loop))
-                 (lambda (val) ;custom put!
-                   (put! data val)
+                 (lambda (val) ;default put!
+                   (set! data (append data (list val)))
                    (append-non-empty-channel-id! id))
-                 empty?))] ;custom empty?
-            [() ;default parallel-channel case
-             (lambda ()
-               (let ([data '()])
-                     (new 
-                       data
-                       id
-                       (lambda () ;default get!
-                         (define (loop)
-                           (if (null? data)
-                             (let ()
-                               (set-block! id #t)
-                               (engine-block)
-                               (loop))
-                             (let ([ret (car data)])
-                               (set! data (cdr data))
-                               ret)))
-                         (loop))
-                       (lambda (val) ;default put!
-                         (set! data (append data (list val)))
-                         (append-non-empty-channel-id! id))
-                       (lambda () (null? data)))))]))))) ;default empty?
+                 (lambda () (null? data))))]))))) ;default empty?
 
   ;PUBLIC API
   ;  (ch-get! ch) -> any
@@ -348,7 +351,7 @@
                                    (lambda (fuel ret-vals) (list #t ret-vals))
                                    (lambda (new-engine) (list #f new-engine)))])
                   (if (car engine-ret)
-                      (exec-tasks tb (append results (list (cadr engine-ret))))
+                    (exec-tasks tb (append results (list (cadr engine-ret))))
                     (let ()
                       (if (unsafe?) 
                         ;if execution is set to unsafe mode continue execution
@@ -392,5 +395,5 @@
   ;  (start) ;(go) calls made by thunk1 or thunk2 will also execute asynchronously
   (define (start)
     (if (not (task-box-running *default-task-box*))
-        (parallel *default-task-box*)
-        '()))) 
+      (parallel *default-task-box*)
+      '()))) 
