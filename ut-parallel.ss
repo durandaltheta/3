@@ -33,11 +33,11 @@
         (let ()
           (enqueue-task! tb new-task)
           (test-pass "enqueue did not error" pr w))))
-      (with-exception-handler
-        (lambda (x) (test-pass "enqueue errored as expected" pr w))
-        (let ()
-          (enqueue-task! tb (lambda () 3))
-          (test-pass "enqueue did not error incorrectly" pr w))))
+    (with-exception-handler
+      (lambda (x) (test-pass "enqueue errored as expected" pr w))
+      (let ()
+        (enqueue-task! tb (lambda () 3))
+        (test-pass "enqueue did not error incorrectly" pr w))))
 
   ;****************************************************************************
   (define (ut-parallel)
@@ -88,15 +88,31 @@
 
     (let ([ch1 (make-parallel-channel)]
           [ch2 (make-parallel-channel)])
-      
+
       (define (catch-pass who in-ch out-ch count limit)
-                         (let ([ball (ch-get! in-ch)])
-                           (if (< count limit)
-                             (let ()
-                               (printf "~a passes the ball!\n" who)
-                               (ch-put! out-ch ball)
-                               (catch-pass who (+ count 1) limit))
-                             who)))
+        (set-unsafe!)
+        (printf "who: ~a; count: ~a; limit: ~a\n" who count limit)
+        (flush-output-port)
+        (set-safe!)
+        (let ([ball (ch-get! in-ch)])
+          (set-unsafe!)
+          (printf "~a catches the ball\n" who)
+          (flush-output-port)
+          (set-safe!)
+          (if (< count limit)
+              (let ()
+                (set-unsafe!)
+                (printf "~a passes the ball!\n" who)
+                (flush-output-port)
+                (set-safe!)
+                ;(printf "~a catch-pass 1\n" who)
+                (ch-put! out-ch ball)
+                ;(printf "catch-pass 2\n")
+                (catch-pass who in-ch out-ch (+ count 1) limit)
+                )
+              (let ()
+                (printf "~a finished\n" who)
+                who))))
 
       (go (lambda () (catch-pass "thunk1" ch1 ch2 0 10)))
       (go (lambda () (catch-pass "thunk2" ch2 ch1 0 10)))
@@ -113,7 +129,7 @@
   practical-channel-start-go
   practical-use-case
   |# 
-  
+
   ;****************************************************************************
   (define (run-ut-parallel print-result wait)
     (set! pr print-result)
