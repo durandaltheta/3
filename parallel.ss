@@ -125,7 +125,7 @@
           [(thunk fuel) (new fuel (make-engine thunk))]
           [(engine-or-thunk fuel is-engine) 
            (if is-engine (new fuel engine-or-thunk)
-               (new fuel (make-engine engine-or-thunk)))]))))
+             (new fuel (make-engine engine-or-thunk)))]))))
 
 
   (define-record-type
@@ -138,29 +138,29 @@
         (lambda (task-list)
           (define (validate-task-list task-list)
             (if (null? task-list)
-                (list #t '())
-                (if (task? (car task-list))
-                    (validate-task-list (cdr task-list))
-                    (list #f (car task-list)))))
+              (list #t '())
+              (if (task? (car task-list))
+                (validate-task-list (cdr task-list))
+                (list #f (car task-list)))))
 
           (let ([res (validate-task-list task-list)])
             (if (car res)
-                (new (box task-list) '() #f)
-                (let ([o (open-output-string)])
-                  (fprintf o
-                           "[make-task-box] provided task ~a is not a task record, in task list: ~a\n" 
-                           (cadr res) 
-                           task-list)
-                  (raise-error (get-output-string o))
-                  (new (box '()) '() #f))))))))
+              (new (box task-list) '() #f)
+              (let ([o (open-output-string)])
+                (fprintf o
+                         "[make-task-box] provided task ~a is not a task record, in task list: ~a\n" 
+                         (cadr res) 
+                         task-list)
+                (raise-error (get-output-string o))
+                (new (box '()) '() #f))))))))
 
 
   (define (enqueue-task! tb task)
     (if (task? task)
-        (set-box! (task-box-contents tb) (append (unbox (task-box-contents tb)) (list task)))
-        (let ([o (open-output-string)])
-          (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
-          (raise-error (get-output-string o)))))
+      (set-box! (task-box-contents tb) (append (unbox (task-box-contents tb)) (list task)))
+      (let ([o (open-output-string)])
+        (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
+        (raise-error (get-output-string o)))))
 
 
   (define (dequeue-task! tb) ;null? checking happens in (parallel)
@@ -172,10 +172,10 @@
 
   (define (enqueue-task-as-head! tb task)
     (if (task? task)
-        (set-box! (task-box-contents tb) (append (list task) (unbox (task-box-contents tb))))
-        (let ([o (open-output-string)])
-          (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
-          (raise-error (get-output-string o)))))
+      (set-box! (task-box-contents tb) (append (list task) (unbox (task-box-contents tb))))
+      (let ([o (open-output-string)])
+        (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
+        (raise-error (get-output-string o)))))
 
 
   ;global task timeout 'mutex'
@@ -192,9 +192,9 @@
   (define *CHANNEL-NON-EMPTY-IDS* (list))
 
 
-  (define (set-block! val bool)
+  (define (set-block! id bool)
     (set-unsafe!)
-    (set! *CHANNEL-BLOCK-ID* val)
+    (set! *CHANNEL-BLOCK-ID* id)
     (set! *CHANNEL-BLOCK-FLAG* bool)
     (set-safe!))
 
@@ -202,19 +202,23 @@
   (define append-non-empty-channel-id! 
     (lambda (val)
       (set-unsafe!)
-      (printf "*CHANNEL-NON-EMPTY-IDS* 1: ~a\n" *CHANNEL-NON-EMPTY-IDS*)
-      (flush-output-port)
+      ;(printf "*CHANNEL-NON-EMPTY-IDS* 1: ~a\n" *CHANNEL-NON-EMPTY-IDS*)
+      ;(flush-output-port)
       (set! *CHANNEL-NON-EMPTY-IDS* (append *CHANNEL-NON-EMPTY-IDS* (list val)))
-      (printf "*CHANNEL-NON-EMPTY-IDS* 2: ~a\n" *CHANNEL-NON-EMPTY-IDS*)
-      (flush-output-port)
+      ;(printf "*CHANNEL-NON-EMPTY-IDS* 2: ~a\n" *CHANNEL-NON-EMPTY-IDS*)
+      ;(flush-output-port)
       (set! *CHANNEL-NON-EMPTY-FLAG* #t)
       (set-safe!)))
 
+
+  (define get-incrementor (lambda ()
+                            (let ([id 0]) 
+                              (lambda () (let ([ret id]) 
+                                           (set! id (+ id 1)) 
+                                           ret)))))
+
   ;function that always emits a unique numerical value per invocation
-  (define incrementor (let ([id 0]) 
-                        (lambda () (let ([ret id]) 
-                                     (set! id (+ id 1)) 
-                                     ret))))
+  (define incrementor (get-incrementor))
 
   ;record that contains threadsafe data passing functions. Can be created 
   ;without arguments to create a default record OR with custom communication 
@@ -241,11 +245,12 @@
                (lambda () ;custom get!
                  (define (loop)
                    (if (empty? data)
-                       (let ()
-                         (set-block! id #t)
-                         (engine-block)
-                         (loop))
-                       (get! data)))
+                     (let ()
+                       (set-block! id #t)
+                       (engine-block)
+                       (loop))
+                     (get! data)))
+                 (flush-output-port)
                  (loop))
                (lambda (val) ;custom put!
                  (put! data val)
@@ -254,7 +259,7 @@
           [() ;default parallel-channel case
            (let ([data (list)]
                  [id (incrementor)])
-             (printf "!!!!!!!!!!!!id: ~a\n" id)
+             ;(printf "!!!!!!!!!!!!id: ~a\n" id)
              (flush-output-port)
              (new 
                data
@@ -262,16 +267,26 @@
                (lambda () ;default get!
                  (define (loop)
                    (if (null? data)
-                       (let ()
-                         (set-block! id #t)
-                         (engine-block)
-                         (loop))
-                       (let ([ret (car data)])
-                         (set! data (cdr data))
-                         ret)))
+                     (let ()
+                       ;(printf "ch-get! id ~a data: null\n" id)
+                       ;(flush-output-port)
+                       (set-block! id #t)
+                       (engine-block)
+                       (loop))
+                     (let ([ret (car data)])
+                       ;(printf "ch-get! id ~a data: ~a\n" id ret)
+                       ;(flush-output-port)
+                       (set! data (cdr data))
+                       ret)))
+                 ;(printf "ch-get! id ~a\n" id)
+                 ;(flush-output-port)
                  (loop))
                (lambda (val) ;default put!
+                 ;(printf "ch-put! id ~a new val: ~a\n" id val)
+                 ;(flush-output-port)
                  (set! data (append data (list val)))
+                 ;(printf "ch-put! id ~a data: ~a\n" id data)
+                 ;(flush-output-port)
                  (append-non-empty-channel-id! id))
                (lambda () (null? data))))])))) ;default empty?
 
@@ -279,133 +294,191 @@
   ;  (ch-get! ch) -> any
   (define (ch-get! ch)
     (if (parallel-channel? ch)
-        ((parallel-channel-get! ch))
-        (let ([o (open-output-string)])
-          (fprintf o "[ch-get!] provided ch ~a is not a parallel-channel record\n" ch)
-          (raise-error (get-output-string o))
-          (values))))
+      ((parallel-channel-get! ch))
+      (let ([o (open-output-string)])
+        (fprintf o "[ch-get!] provided ch ~a is not a parallel-channel record\n" ch)
+        (raise-error (get-output-string o))
+        (values))))
 
   ;PUBLIC API
   ;  (ch-put! ch val) -> void
   (define (ch-put! ch val)
     (if (parallel-channel? ch)
-        ((parallel-channel-put! ch) val)
-        (let ([o (open-output-string)])
-          (fprintf o "[ch-put!] provided ch ~a is not a parallel-channel record\n" ch)
-          (raise-error (get-output-string o))
-          (values))))
+      ((parallel-channel-put! ch) val)
+      (let ([o (open-output-string)])
+        (fprintf o "[ch-put!] provided ch ~a is not a parallel-channel record\n" ch)
+        (raise-error (get-output-string o))
+        (values))))
 
   ;PUBLIC API
   ;  (ch-empty? ch) -> boolean
   (define (ch-empty? ch)
     (if (parallel-channel? ch)
-        ((parallel-channel-empty? ch))
-        (let ([o (open-output-string)])
-          (fprintf o "[ch-empty?] provided ch ~a is not a parallel-channel record\n" ch)
-          (raise-error (get-output-string o))
-          (values))))
+      ((parallel-channel-empty? ch))
+      (let ([o (open-output-string)])
+        (fprintf o "[ch-empty?] provided ch ~a is not a parallel-channel record\n" ch)
+        (raise-error (get-output-string o))
+        (values))))
 
+
+  (define parallel-debug #t)
 
   ;PUBLIC API
   ;  (parallel tb) -> list-of-results
   ;execute tasks in task-box in parallel
   (define (parallel tb)
     (if (task-box? tb)
-        ;temporarily assign new values for global variables
-        (fluid-let 
-          ([*CHANNEL-BLOCK-FLAG* #f]
-           [*CHANNEL-BLOCK-ID* 0]
-           [*CHANNEL-NON-EMPTY-FLAG* #f]
-           [*CHANNEL-NON-EMPTY-IDS* (list)]
-           [incrementor (let ([id 0]) 
-                          (lambda () (let ([ret id]) 
-                                       (set! id (+ id 1)) 
-                                       ret)))]
-           [append-non-empty-channel-id! 
-             (lambda (val)
-               (set-unsafe!)
-               (printf "*CHANNEL-NON-EMPTY-IDS* PARALLEL 1: ~a\n" *CHANNEL-NON-EMPTY-IDS*)
-               (flush-output-port)
-               (set! *CHANNEL-NON-EMPTY-IDS* (append *CHANNEL-NON-EMPTY-IDS* (list val)))
-               (printf "*CHANNEL-NON-EMPTY-IDS* PARALLEL 2: ~a\n" *CHANNEL-NON-EMPTY-IDS*)
-               (flush-output-port)
-               (set! *CHANNEL-NON-EMPTY-FLAG* #t)
-               (set-safe!))]
-           )
+      ;temporarily assign new values for global variables
+      (fluid-let 
+        ([*CHANNEL-BLOCK-FLAG* #f]
+         [*CHANNEL-BLOCK-ID* 0]
+         [*CHANNEL-NON-EMPTY-FLAG* #f]
+         [*CHANNEL-NON-EMPTY-IDS* (list)]
+         [incrementor (get-incrementor)])
+         #|[append-non-empty-channel-id! 
+           (lambda (val)
+             (set-unsafe!)
+             (printf "*CHANNEL-NON-EMPTY-IDS* PARALLEL 1: ~a\n" *CHANNEL-NON-EMPTY-IDS*)
+             (flush-output-port)
+             (set! *CHANNEL-NON-EMPTY-IDS* (append *CHANNEL-NON-EMPTY-IDS* (list val)))
+             (printf "*CHANNEL-NON-EMPTY-IDS* PARALLEL 2: ~a\n" *CHANNEL-NON-EMPTY-IDS*)
+             (flush-output-port)
+             (set! *CHANNEL-NON-EMPTY-FLAG* #t)
+             (set-safe!))]
+         )|#
 
-          ;enqueue a task that's blocked waiting for input from a 
-          ;parallel-channel
-          (define (enqueue-waiting-task! task)
-            (printf "tb waiting 1: ~a\n" (task-box-waiting tb))
-            (flush-output-port)
-            (task-box-waiting-set! tb (append (task-box-waiting tb) (list (list *CHANNEL-BLOCK-ID* task))))
-            (printf "tb waiting 2: ~a\n" (task-box-waiting tb))
-            (flush-output-port)
-            (set-block! 0 #f))
+        ;enqueue a task that's blocked waiting for input from a 
+        ;parallel-channel
+        (define (enqueue-waiting-task! id task)
+          (when parallel-debug
+            (let ()
+              (printf "tb waiting 1: ~a\n" (task-box-waiting tb))
+              (flush-output-port)))
+          (task-box-waiting-set! tb (append (task-box-waiting tb) (list (list id task))))
+          (when parallel-debug
+            (let ()
+              (printf "tb waiting 2: ~a\n" (task-box-waiting tb))
+              (flush-output-port)))
+          (set-block! 0 #f))
 
-          ;execute any tasks waiting for now non-empty parallel-channel id, 
-          ;return any tasks still waiting
-          (define (enqueue-tasks-waiting-for-id! id)
-            (define (loop waiting parsed)
-              (if (null? waiting)
-                  parsed 
-                  (let ([cur (car waiting)])
-                    (if (eqv? id (car cur))
-                        (let ()
-                          (enqueue-task! tb (cadr cur))
-                          (loop (cdr waiting) parsed))
-                        (loop (cdr waiting) (append parsed (car waiting)))))))
-            (let ([parsed (loop (task-box-waiting tb) '())])
-              (task-box-waiting-set! tb '())
-              parsed))
+        ;execute any tasks waiting for now non-empty parallel-channel id, 
+        ;return any tasks still waiting
+        (define (enqueue-tasks-waiting-for-id! id)
+          (define (loop waiting parsed)
+            (if (null? waiting)
+              parsed 
+              (let ([cur (car waiting)])
+                (if (eqv? id (car cur))
+                  (let ()
+                    (when parallel-debug
+                      (let ()
+                        (printf "enqueueing cur: ~a\n" cur)
+                        (flush-output-port)))
+                    (enqueue-task! tb (cadr cur))
+                    (loop (cdr waiting) parsed))
+                  (loop (cdr waiting) (append parsed (car waiting)))))))
+          (when parallel-debug
+            (let ()
+              (printf "waiting: ~a\n" (task-box-waiting tb))
+              (flush-output-port)))
+          (let ([parsed (loop (task-box-waiting tb) '())])
+            (task-box-waiting-set! tb '())
+            parsed))
 
-          ;handle all now non-empty channel ids
-          (define (enqueue-waiting-tasks!)
-            (map enqueue-tasks-waiting-for-id! *CHANNEL-NON-EMPTY-IDS*)
-            (set! *CHANNEL-NON-EMPTY-FLAG* #f)
-            (set! *CHANNEL-NON-EMPTY-IDS* '()))
+        ;handle all now non-empty channel ids
+        (define (enqueue-no-longer-waiting-tasks!)
+          (when parallel-debug
+            (let ()
+              (printf "enqueue-no-longer-waiting-tasks! 1\n")
+              (flush-output-port)))
+          (map enqueue-tasks-waiting-for-id! *CHANNEL-NON-EMPTY-IDS*)
+          (when parallel-debug
+            (let ()
+              (printf "enqueue-no-longer-waiting-tasks! 2\n")
+              (flush-output-port)))
+          (set! *CHANNEL-NON-EMPTY-FLAG* #f)
+          (set! *CHANNEL-NON-EMPTY-IDS* (list)))
 
-          ;execute tasks in parallel
-          (define (exec-tasks tb results)
-            ;if channels have new values, enqueue waiting tasks for that channel 
-            ;id 
-            (when *CHANNEL-NON-EMPTY-FLAG* (enqueue-waiting-tasks!))
-            (if (null? (unbox (task-box-contents tb)))
-                (if (null? (task-box-waiting tb))
-                    results
+        ;execute tasks in parallel
+        (define (exec-tasks tb results)
+          ;if channels have new values, enqueue waiting tasks for that channel 
+          ;id  
+          #|(when parallel-debug
+            (let ()
+              (printf "exec-tasks 1\n")
+              (flush-output-port)))|#
+          (when *CHANNEL-NON-EMPTY-FLAG* (enqueue-no-longer-waiting-tasks!))
+          (if (null? (unbox (task-box-contents tb)))
+            (let ()
+              (when parallel-debug
+                (let ()
+                  (printf "exec-tasks task box null\n")
+                  (flush-output-port)))
+
+              (if (null? (task-box-waiting tb))
+                results
+                (let ()
+                  (sleep (make-time 'time-duration 10000000 0))
+                  (exec-tasks tb results)))
+              )
+            (let ([task (dequeue-task! tb)])
+              (when parallel-debug
+                (let ()
+                  (printf "exec-tasks dequeued task: ~a\n" task)
+                  (flush-output-port)))
+              (let ([fuel (task-fuel task)])
+                (when parallel-debug
+                  (let ()
+                    (printf "exec-tasks dequeued task fuel: ~a\n" fuel)
+                    (flush-output-port)))
+                (let ([engine-ret ((task-engine task)
+                                   fuel
+                                   (lambda (fuel ret-vals) (list #t ret-vals))
+                                   (lambda (new-engine) (list #f new-engine)))])
+                  (when parallel-debug
                     (let ()
-                      (sleep (make-time 'time-duration 10000000 0))
-                      (exec-tasks tb results))) 
-                (let ([task (dequeue-task! tb)])
-                  (let ([fuel (task-fuel task)])
-                    (let ([engine-ret ((task-engine task)
-                                       fuel
-                                       (lambda (fuel ret-vals) (list #t ret-vals))
-                                       (lambda (new-engine) (list #f new-engine)))])
-                      (if (car engine-ret)
-                          (exec-tasks tb (append results (list (cadr engine-ret))))
-                          (let ()
-                            (if (unsafe?) 
-                                ;if execution is set to unsafe mode continue execution
-                                ;linearly until safe to execute in parallel
+                      (printf "exec-tasks engine ret: ~a\n" engine-ret)
+                      (flush-output-port)))
+                  (if (car engine-ret)
+                    (exec-tasks tb (append results (list (cadr engine-ret))))
+                    (let ()
+                      (if (unsafe?) 
+                        ;if execution is set to unsafe mode continue execution
+                        ;linearly until safe to execute in parallel
+                        (let ([new-task (make-task (cadr engine-ret) fuel #t)])
+                          (when parallel-debug
+                            (let ()
+                              (printf "exec-tasks unsafe new task: ~a\n" new-task)
+                              (flush-output-port)))
+                          (enqueue-task-as-head! tb new-task)
+                          (exec-tasks tb results))
+                        (let ([new-task (make-task (cadr engine-ret) fuel #t)])
+                          ;if task is blocked on a parallel-channel get!
+                          (if *CHANNEL-BLOCK-FLAG* 
+                            (let ()
+                              (when parallel-debug
                                 (let ()
-                                  (enqueue-task-as-head! tb (make-task (cadr engine-ret) fuel #t))
-                                  (exec-tasks tb results))
+                                  (printf "exec-tasks blocked task: ~a\n" new-task)
+                                  (flush-output-port)))
+                              (enqueue-waiting-task! *CHANNEL-BLOCK-ID* new-task)
+                              )
+                            (let ()
+                              (when parallel-debug
                                 (let ()
-                                  ;if task is blocked on a parallel-channel get!
-                                  (if *CHANNEL-BLOCK-FLAG* 
-                                      (enqueue-waiting-task! (make-task (cadr engine-ret) fuel))
-                                      (enqueue-task! tb (make-task (cadr engine-ret) fuel)))
-                                  (exec-tasks tb results))))))))))
+                                  (printf "exec-tasks enqueing timed out task: ~a\n" new-task)
+                                  (flush-output-port)))
+                              (enqueue-task! tb new-task))
+                              )
+                          (exec-tasks tb results))))))))))
 
-          ; exec section (defines are complete) 
-          (task-box-running-set! tb #t)
-          (let ([ret (exec-tasks tb '())])
-            (task-box-running-set! tb #f)
-            ret))
-        (let ([o (open-output-string)])
-          (fprintf o "[parallel] provided task-box argument ~a is not a task-box record\n" tb)
-          (raise-error (get-output-string o)))))
+        ; exec section (defines are complete) 
+        (task-box-running-set! tb #t)
+        (let ([ret (exec-tasks tb '())])
+          (task-box-running-set! tb #f)
+          ret))
+      (let ([o (open-output-string)])
+        (fprintf o "[parallel] provided task-box argument ~a is not a task-box record\n" tb)
+        (raise-error (get-output-string o)))))
 
   (define *default-task-box* (make-task-box '()))
 
@@ -428,5 +501,5 @@
   ;  (start) ;(go) calls made by thunk1 or thunk2 will also execute asynchronously
   (define (start)
     (if (not (task-box-running *default-task-box*))
-        (parallel *default-task-box*)
-        '()))) 
+      (parallel *default-task-box*)
+      '()))) 

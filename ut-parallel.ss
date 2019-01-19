@@ -86,14 +86,16 @@
       (test-equal? "did our 3rd put! and get! succeed?" "test" (ch-get! ch) pr w)
       (test-true? "make sure the channel is empty" (ch-empty? ch) pr w))
 
+
+    (printf "\n\n\n")
+    (flush-output-port)
     (let ([ch1 (make-parallel-channel)]
           [ch2 (make-parallel-channel)])
-
       (define (catch-pass who in-ch out-ch count limit)
-        (set-unsafe!)
-        (printf "who: ~a; count: ~a; limit: ~a\n" who count limit)
-        (flush-output-port)
-        (set-safe!)
+        ;(set-unsafe!)
+        ;(printf "who: ~a; count: ~a; limit: ~a\n" who count limit)
+        ;(flush-output-port)
+        ;(set-safe!)
         (let ([ball (ch-get! in-ch)])
           (set-unsafe!)
           (printf "~a catches the ball\n" who)
@@ -113,7 +115,6 @@
               (let ()
                 (printf "~a finished\n" who)
                 who))))
-
       (go (lambda () (catch-pass "thunk1" ch1 ch2 0 10)))
       (go (lambda () (catch-pass "thunk2" ch2 ch1 0 10)))
       (ch-put! ch1 'ball)
