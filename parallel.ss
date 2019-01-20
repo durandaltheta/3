@@ -11,12 +11,9 @@
 
     ;  (go task-box thunk) -> void
     ;  (go task-box thunk fuel) -> void
-    ;Enqueues a thunk to be executed.
-    ;
-    ;As a note these tasks will not be executed unless (parallel) is called 
-    ;with the task-box passed to (go). However, any (go) function executed by a 
-    ;running task will *NOT* block, therefore this is safe to use (go) within 
-    ;tasks run by (parallel).
+    ;Enqueues a thunk into a task-box in order to be executed by (parallel). 
+    ;If (go) was invoked by a thunk currently running in (parallel), the newly
+    ;enqueued thunk will also be asynchronously executed.
     go
 
     ;  (set-safe!) -> void
@@ -41,48 +38,78 @@
     unsafe?
 
     ;  (make-parallel-channel) -> parallel-channel  
-    ;make a channel capable of communicating between asynchronous tasks 
-    ;executed by (parallel) or (managed-parallel).
+    ;make a channel capable of communicating both between asynchronous tasks 
+    ;running in (parallel), but also by code in other threads. It is 
+    ;recommended when using parallel channel blocking calls to communicate 
+    ;between two tasks running in separate (parallel) executions (in different 
+    ;threads) to use (unsafe!) before the blocking call and (safe!) when the 
+    ;call finishes.
     ;
-    ;These channels are *ONLY* safe to use within tasks running in (parallel).
     ;
-    ;
-    ;  (make-parrallel-channel communication-object blocking-get! put! empty?)
+    ;  (make-parrallel-channel communication-object blocking-get! put! empty? failure-value)
     ;It is possible to create a custom  parallel channel by passing this 
     ;function an arbitrary communication object (a queue, channel, pipe, etc..) 
     ;and the following object manipulation functions:
-    ;  blocking-get! : returns a value from the object. Blocks if nothing in 
-    ;                  the object.
-    ;  put! : puts a value into the object. If this blocks, it will block
-    ;         the entire thread (including parallel/managed-parallel)
+    ;  get! : returns a value from the object.
+    ;  put! : puts a value into the object. 
     ;  empty? : returns #t if object is empty, else #f
+    ;  full? : returns #t if object is full, else #f
     ;
-    ;A custom parallel-channel is useful if gathering input from outside the 
-    ;process or thread is necessary
+    ;Also must pass in a failure-value. This is returned if unable to complete
+    ;a pch-try-get!/pch-try-put! operation.
+    ;
+    ;If input get!/put! functions block, care must be taken in any code that 
+    ;uses the raw communication object instead of the parallel-channel
+    ;encapsulation provided here. Essentially, don't remove values from a 
+    ;channel when a task running in (parallel) is expected to also remove 
+    ;values from via a parallel-channel. The same is true of adding values, 
+    ;don't add values to a communication object where a task running in 
+    ;(parallel) is also expected to add values to the object via a 
+    ;parallel-channel.
+    ;
+    ;Similarly, using a custom parallel-channel is useful if gathering input 
+    ;from outside the thread is necessary. If the using a parallel-channel to 
+    ;get data from outside the process, beware that pch-get!/pch-put! may 
+    ;cause the entire thread to block.
     make-parallel-channel 
 
     ;  (parallel-channel? a) -> boolean
     ;returns #t if argument a is a parallel-channel, else returns #f
     parallel-channel?
 
-    ;  (ch-get parallel-channel) -> any
-    ;Get value from parallel channel
-    ch-get!
+    ;  (ch-get! parallel-channel) -> any
+    ;Get value from parallel channel, blocking until available.
+    pch-get!
 
-    ;  (ch-put parallel-channel any) -> void
-    ;Put a value into a parallel-channel
-    ch-put!
+    ;  (ch-try-get! parallel-channel) -> any
+    ;Try to get a value from parallel channel, returning failure value 
+    ;otherwise.
+    pch-try-get!
 
-    ;  (ch-empty? parallel-channel) -> boolean
+    ;  (ch-put! parallel-channel any) -> void
+    ;Put a value into a parallel-channel, blocking until space available.
+    pch-put!
+
+    ;  (ch-try-put! parallel-channel any) -> void
+    ;Try to put a value into a parallel-channel, returning failure value 
+    ;otherwise. 
+    pch-try-put!
+
+    ;  (pch-empty? parallel-channel) -> boolean
     ;Returns #t if channel is empty, else returns #f
-    ch-empty?
+    pch-empty?
+
+
+    ;  (pch-full? parallel-channel) -> boolean
+    ;Returns #t if channel is full, else returns #f
+    pch-full?
 
     ;  (parallel task-box) -> list-of-task-results 
     ;execute all tasks contained in given task-box asynchronously before 
     ;returning all task return values as a list in the order completed. 
     ;
     ;WARNINGS:
-    ;- Will not return if any tasks are blocking via parallel-channel-get!
+    ;- Will not return if any tasks are blocking via parallel-channel-get!/put!
     ;- Do *not* use (set-timer) inside a task, will break implementation
     ;- To make modification of shared memory safe, invoke (set-unsafe!). This 
     ;  forces parallel to execute linearly. Use (set-safe!) to restore normal
@@ -100,7 +127,11 @@
         (make-error)
         (make-message-condition msg))))
 
+  ;global hidden defaults
   (define *default-engine-fuel* 50) 
+  (define *default-sleep-nanoseconds* 10000000) ;10 milliseconds
+  (define *default-sleep-time* (make-time 'time-duration *default-sleep-nanoseconds* 0))
+  (define (default-sleep) (sleep *default-sleep-time*))
 
   (define-record-type
     task
@@ -137,7 +168,7 @@
 
   (define-record-type
     task-box 
-    (fields (immutable thread-id)
+    (fields (mutable thread-id)
             (mutable contents)
             (mutable waiting)
             (mutable running)
@@ -196,28 +227,24 @@
   (define append-non-empty-channel-id! 
     (lambda (tb val)
       (let ([cur-non-empty-ids (task-box-channel-non-empty-ids tb)])
-        (set-unsafe! tb)
         (when (not (member val cur-non-empty-ids))
           (task-box-channel-non-empty-ids-set! tb (append cur-non-empty-ids (list val))))
-        (task-box-channel-non-empty-flag-set! tb #t)
-        (set-safe! tb))))
+        (task-box-channel-non-empty-flag-set! tb #t))))
 
 
   (define append-non-full-channel-id! 
     (lambda (tb val)
       (let ([cur-non-full-ids (task-box-channel-non-full-ids tb)])
-        (set-unsafe! tb)
         (when (not (member val cur-non-full-ids))
           (task-box-channel-non-full-ids-set! tb (append cur-non-full-ids (list val))))
-        (task-box-channel-non-full-flag-set! tb #t)
-        (set-safe! tb)))) 
+        (task-box-channel-non-full-flag-set! tb #t)))) 
 
 
   (define (pause-parallel tb)
     (define (wait-for-pause)
       (when (task-box-running tb)
         (let ()
-          (sleep (make-time 'time-duration 10000000 0))
+          (default-sleep)
           (wait-for-pause))))
     (task-box-pause-set! tb #t)
     (wait-for-pause))
@@ -247,6 +274,7 @@
       (mutable task-box)
       (mutable obj)
       (immutable id)
+      (immutable failure)
       (immutable get!)
       (immutable put!)
       (immutable empty?)
@@ -267,22 +295,27 @@
                                   (if (empty? obj)
                                     failure
                                     (let ()
+                                      (set-unsafe!)
                                       (append-non-full-channel-id! tb id)
-                                      (get! obj))))]
+                                      (get! obj)
+                                      (set-safe!))))]
                  [internal-put! (lambda (val)
                                   (if (full? obj)
                                     failure
                                     (let ()
+                                      (set-unsafe!)
                                       (append-non-empty-channel-id! tb id)
-                                      (put! obj val))))])
+                                      (put! obj val)
+                                      (set-safe!))))])
              (new tb
                   obj 
                   id 
+                  failure
                   (lambda () ;custom get!
                     (define (loop)
                       (if (empty? obj)
                         (let ()
-                          (set-block! tb id #t 'unknown)
+                          (set-get-block! tb id #t)
                           (engine-block)
                           (loop))
                         (internal-get!)))
@@ -300,123 +333,180 @@
                     (internal-put! val)
                     (unpause-parallel tb))))] ;custom extern-put!
           [(tb) ;default parallel-channel case
-           (let ([obj (list)]
-                 [id (incrementor)]
-                 [failure #f]
-                 [default-get! (lambda ()
-                                 (let ([ret (car obj)])
-                                   (set! obj (cdr obj))
-                                   ret))]
-                 [default-put! (lambda () (let ([ret (car obj)])
-                                            (set! obj (cdr obj))
-                                            ret))])
-             (let ([internal-get! (lambda ()
-                                    (if (empty? obj)
-                                      failure
-                                      (let ()
-                                        (append-non-full-channel-id! tb id)
-                                        (default-get! obj))))]
-                   [internal-put! (lambda (val)
-                                    (if (full? obj)
-                                      failure
-                                      (let ()
-                                        (append-non-empty-channel-id! tb id)
-                                        (default-put! obj val))))])
-               (new tb
-                    obj
-                    id
-                    (lambda () ;default get!
-                      (define (loop)
-                        (if (empty? obj)
-                          (let ()
-                            (set-block! tb id #t 'unknown)
-                            (engine-block)
-                            (loop))
-                          (internal-get!)))
-                      (loop))
-                    (lambda (val) ;default put!
-                      (define (loop)
-                        (if (full? obj)
-                          (let ()
-                            (set-block! tb id 'unknown #t)
-                            (engine-block)
-                            (loop))
-                          (let ()
-                            (set! obj (append obj (list val)))
-                            (append-non-empty-channel-id! tb id))))
-                      (loop))
-                    (lambda () (eqv? '() obj)) ;default empty?
-                    (lambda () #f) ;default full?
-                    (lambda () ;default external-get!
-                      (pause-parallel tb)
-                      (internal-get!)
-                      (unpause-parallel tb))
-                    (lambda (val)
-                      (pause-parallel tb)
-                      (internal-put! val)
-                      (unpause-parallel tb)))))])))) ;default external-put!
+           (let* ([obj (list)]
+                  [id (incrementor)]
+                  [failure #f]
+                  [default-get! (lambda ()
+                                  (let ([ret (car obj)])
+                                    (set! obj (cdr obj))
+                                    ret))]
+                  [default-put! (lambda () (let ([ret (car obj)])
+                                             (set! obj (cdr obj))
+                                             ret))]
+                  [internal-get! (lambda ()
+                                   (if (empty? obj)
+                                     failure
+                                     (let ()
+                                       (set-unsafe!)
+                                       (append-non-full-channel-id! tb id)
+                                       (default-get! obj)
+                                       (set-safe!))))]
+                  [internal-put! (lambda (val)
+                                   (if (full? obj)
+                                     failure
+                                     (let ()
+                                       (set-unsafe!)
+                                       (append-non-empty-channel-id! tb id)
+                                       (default-put! obj val)
+                                       (set-safe!))))])
+             (new tb
+                  obj
+                  id
+                  failure
+                  (lambda () ;default get!
+                    (define (loop)
+                      (if (empty? obj)
+                        (let ()
+                          (set-get-block! tb id #t)
+                          (engine-block)
+                          (loop))
+                        (internal-get!)))
+                    (loop))
+                  (lambda (val) ;default put!
+                    (define (loop)
+                      (if (full? obj)
+                        (let ()
+                          (set-put-block! tb id #t)
+                          (engine-block)
+                          (loop))
+                        (let ()
+                          (set! obj (append obj (list val)))
+                          (append-non-empty-channel-id! tb id))))
+                    (loop))
+                  (lambda () (eqv? '() obj)) ;default empty?
+                  (lambda () #f) ;default full?
+                  (lambda () ;default external-get!
+                    (pause-parallel tb)
+                    (internal-get!)
+                    (unpause-parallel tb))
+                  (lambda (val)
+                    (pause-parallel tb)
+                    (internal-put! val)
+                    (unpause-parallel tb))))])))) ;default external-put!
 
 
-  ;for use in ch-get! and ch-put!. Returns whether a given channel is being 
+  ;for use in pch-get! and pch-put!. Returns whether a given channel is being 
   ;used within a task-box running in parallel within the same process and 
   ;thread
   (define (in-running-task? tb)
-    (if (eqv? (task-box-process-id tb) (get-process-id))
-      (if (eqv? (task-box-thread-id tb) (safe-get-thread-id))
-        (if (eqv? (task-box-running tb) #t)
-          #t)
+    (if (eqv? (task-box-thread-id tb) (safe-get-thread-id))
+      (if (eqv? (task-box-running tb) #t)
+        #t
         #f)
       #f))
 
+
+  (define (error-not-parallel-channel ch)
+    (let ([o (open-output-string)])
+      (fprintf o "[pch-get!] provided ch ~a is not a parallel-channel record\n" ch)
+      (raise-error (get-output-string o))
+      (values)))
+
+
+  ;explaining the implementation of the following parallel-channel manipulation 
+  ;functions.
+  ;
+  ;parallel-channel-get!/put! are used by tasks running in parallel and blocks 
+  ;by default. This blocking behavior is managed by (parallel) itself. 
+  ;pch-try-get!/put! implement an empty?/full? check inside of unsafe!/safe! 
+  ;calls, ensuring the the behavior is atomic.
+  ;
+  ;Since parallel-channel-external-get!/put! are used by code *not* running in 
+  ;(parallel) blocking behavior is not available and thus these functions are 
+  ;try-get!/try-put! by default. Thus we implement busy waiting to create 
+  ;blocking behavior. Data safety is ensured by pause-parallel/unpause-parallel
+  ;calls, which ensure that (parallel) is paused before we attempt to modify 
+  ;data.
+
+
   ;PUBLIC API
-  ;  (ch-get! ch) -> any
-  (define (ch-get! ch)
+  ;  (pch-get! ch) -> any
+  ;blocking get
+  (define (pch-get! ch)
     (if (parallel-channel? ch)
       (let ([tb (parallel-channel-task-box ch)])
         (if (in-running-task? tb)
-          ((parallel-channel-get! ch))
-          ((parallel-channel-external-get! ch))))
-      (let ([o (open-output-string)])
-        (fprintf o "[ch-get!] provided ch ~a is not a parallel-channel record\n" ch)
-        (raise-error (get-output-string o))
-        (values))))
+          ;pch-get! from running (parallel) tasks block by default
+          ((parallel-channel-get! ch)) 
+          ;must implement blocking manually otherwise
+          (let ()
+            (define (wait-loop)
+              (if (pch-empty? ch)
+                (let ()
+                  (default-sleep)
+                  (wait-loop))
+                (let ([res ((parallel-channel-external-get! ch))])
+                  (if (eqv? res (parallel-channel-failure ch))
+                    (wait-loop)
+                    res))))
+            (wait-loop))))
+      (error-not-parallel-channel)))
 
   ;PUBLIC API
-  ;  (ch-put! ch val) -> void
-  (define (ch-put! ch val)
+  ;  (pch-try-get! ch) -> any
+  ;non-blocking get
+  (define (pch-try-get! ch)
+    (if (parallel-channel? ch)
+      (let ([tb (parallel-channel-task-box ch)])
+        (if (in-running-task? tb)
+          ;must implement try-get behavior for pch-try-get! calls from within 
+          ;tasks running in (parallel)
+          (let ()
+            (set-unsafe!)
+            (if (pch-empty? ch)
+              (parallel-channel-failure ch)
+              ((parallel-channel-get! ch)))
+            (set-safe!))
+          ;pch-try-get! calls work without extra logic otherwise
+          ((parallel-channel-external-get! ch))))
+      (error-not-parallel-channel)))
+
+  ;PUBLIC API
+  ;  (pch-put! ch val) -> void
+  (define (pch-put! ch val)
     (if (parallel-channel? ch)
       (let ([tb (parallel-channel-task-box ch)])
         (if (in-running-task? tb)
           ((parallel-channel-put! ch) val)
           ((parallel-channel-external-put! ch) val)))
-      (let ([o (open-output-string)])
-        (fprintf o "[ch-put!] provided ch ~a is not a parallel-channel record\n" ch)
-        (raise-error (get-output-string o))
-        (values))))
+      (error-not-parallel-channel)))
 
   ;PUBLIC API
-  ;  (ch-empty? ch) -> boolean
-  (define (ch-empty? ch)
+  ;  (pch-try-put! ch val) -> void
+  (define (pch-try-put! ch val)
+    (if (parallel-channel? ch)
+      (let ([tb (parallel-channel-task-box ch)])
+        (if (in-running-task? tb)
+          ((parallel-channel-put! ch) val)
+          ((parallel-channel-external-put! ch) val)))
+      (error-not-parallel-channel)))
+
+  ;PUBLIC API
+  ;  (pch-empty? ch) -> boolean
+  (define (pch-empty? ch)
     (if (parallel-channel? ch)
       ((parallel-channel-empty? ch))
-      (let ([o (open-output-string)])
-        (fprintf o "[ch-empty?] provided ch ~a is not a parallel-channel record\n" ch)
-        (raise-error (get-output-string o))
-        (values))))
+      (error-not-parallel-channel)))
 
   ;PUBLIC API
-  ;  (ch-empty? ch) -> boolean
+  ;  (pch-empty? ch) -> boolean
   (define (ch-full? ch)
     (if (parallel-channel? ch)
       ((parallel-channel-full? ch))
-      (let ([o (open-output-string)])
-        (fprintf o "[ch-empty?] provided ch ~a is not a parallel-channel record\n" ch)
-        (raise-error (get-output-string o))
-        (values))))
+      (error-not-parallel-channel)))
 
 
   (define parallel-debug #f)
-
   (define dprint
     (lambda (tb args)
       (when parallel-debug
@@ -471,7 +561,7 @@
           (define (wait-loop)
             (when (task-box-pause tb)
               (let ()
-                (sleep (make-time 'time-duration 10000000 0))
+                (default-sleep)
                 (wait-loop))))
           (when (task-box-pause tb)
             (let ()
@@ -491,7 +581,7 @@
               (if (eqv? '() (task-box-waiting tb))
                 results
                 (let ()
-                  (sleep (make-time 'time-duration 10000000 0))
+                  (default-sleep)
                   (exec-tasks tb results)))
 
               (let ([task (dequeue-task! tb)])
@@ -518,6 +608,7 @@
                             (exec-tasks tb results)))))))))))
 
         ; exec section (defines are complete) 
+        (task-box-thread-id-set! tb (safe-get-thread-id))
         (task-box-running-set! tb #t)
         (let ([ret (exec-tasks tb '())])
           (task-box-running-set! tb #f)
