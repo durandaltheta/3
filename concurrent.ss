@@ -62,12 +62,12 @@
     ;newly enqueued thunk will also be asynchronously executed.
     go
 
-    ;  (set-safe!) -> void
+    ;  (set-safe! task-box) -> void
     ;Enable concurrent execution in (concurrent). This is #t by default and 
     ;only set #f when (set-unsafe!) is called. 
     set-safe!
 
-    ;  (set-unsafe!) -> void
+    ;  (set-unsafe! task-box) -> void
     ;When this mode is active it forces (concurrent) to execute linearly 
     ;(disables asynchronous execution). This makes modification to 
     ;shared/global values safe. concurrent-channels use these internally.
@@ -80,6 +80,7 @@
     ;(set-safe!)
     set-unsafe!
 
+    ;  (unsafe? task-box) -> bool
     ;Returns #t if in unsafe mode, otherwise #f
     unsafe?
 
@@ -105,9 +106,9 @@
     ;is running with (concurrent-running? task-box)
     unpause-concurrent
 
-    ;  (make-concurrent-channel) -> concurrent-channel  
+    ;  (make-concurrent-channel task-box) -> concurrent-channel  
     ;make a channel capable of communicating both between asynchronous tasks 
-    ;running in (concurrent)
+    ;running in (concurrent) with given task-box.
     make-concurrent-channel 
 
     ;  (concurrent-channel? a) -> boolean
