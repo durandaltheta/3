@@ -1,6 +1,41 @@
 (library 
   (concurrent)
   (export 
+    ;  (concurrent concurrent-handler) -> list-of-task-results 
+    ;Asynchronously execute all tasks given from concurrent-handler.
+    ;concurrent-handler is a function that takes 1 input argument and outputs a
+    ;task or other arbitrary value. 
+    ;
+    ;(concurrent) will execute (concurrent-handler) with the result of the most 
+    ;recent task (starting with '() during the first evaluation). The output of 
+    ;concurrent-handler should be a task record. (concurrent) will return 
+    ;list-of-task-results when concurrent-handler returns anything that is not 
+    ;a task record. A result value is only added to list-of-task-results if 
+    ;the task engine successfully returned (it did not time out or block).
+    concurrent  
+
+    ;  (make-task thunk) -> task
+    ;  (make-task thunk fuel) -> task
+    ;  (make-task engine-or-thunk fuel is-engine) -> task 
+    ;thunk: any function that takes no arguments 
+    ;fuel: amount of fuel for process before blocking and allowing other tasks
+    ;to evaluate.
+    ;engine-or-thunk: An engine object or a thunk function.
+    ;is-engine: #t if engine-or-thunk is an engine object, else #f 
+    ;
+    ;This is typically only used if creating a custom concurrent-handler
+    make-task 
+
+    ;  (task? a) -> bool 
+    ;Returns #t if given value is a task record, else #f.
+    ;
+    ;This is typically only used if creating a custom concurrent-handler
+    task?
+
+    ;;;------------------------------------------------------------------------
+    ;;;The following are convenience functions created using the above 
+    ;;;functions. 
+
     ;  (make-task-box) -> task-box 
     ;create a box of tasks for concurrent execution from a list of task records
     make-task-box 
@@ -8,6 +43,17 @@
     ;  (task-box? a) -> boolean
     ;returns #t if argument a is a task-box, else returns #f
     task-box? 
+
+    ;  (get-concurrent-handler task-box) -> handler 
+    ;Get the concurrent-handler provided by task-box
+    ;
+    ;WARNINGS WHEN USED IN CONCURRENT:
+    ;- Will not return if any tasks are blocking via cch-get! or cch-put!
+    ;- Do *not* use (set-timer) inside a task, will break implementation
+    ;- To make modification of shared memory safe, invoke (set-unsafe!). This 
+    ;  forces (concurrent) to execute linearly. Use (set-safe!) to restore 
+    ;  normal asynchronous execution.
+    get-concurrent-handler
 
     ;  (go task-box thunk) -> void
     ;  (go task-box thunk fuel) -> void
@@ -36,6 +82,28 @@
 
     ;Returns #t if in unsafe mode, otherwise #f
     unsafe?
+
+    ;  (concurrent-sleep task-box nsec) -> void
+    ;Use within currently running task to cause that sleep for a minimum of 
+    ;nsec without blocking (concurrent) execution.
+    concurrent-sleep
+
+    ;  (running? task-box) -> bool
+    ;Return whether task-box is currently running. If #f, safe to modify values 
+    ;running in (concurrent) with given task-box.
+    concurrent-running?
+
+    ;  (pause-concurrent task-box) -> void 
+    ;Tell (concurrent) task-box to pause execution. Can check if (concurrent) 
+    ;is running with (concurrent-running? task-box). Only safe to execute from
+    ;from an outside thread, executing inside a running task will freeze 
+    ;execution and will not restart until an outside thread unpauses it.
+    pause-concurrent
+
+    ;  (unpause-concurrent task-box) -> void
+    ;Tell (concurrent) task-box to resume execution. Can check if (concurrent) 
+    ;is running with (concurrent-running? task-box)
+    unpause-concurrent
 
     ;  (make-concurrent-channel) -> concurrent-channel  
     ;make a channel capable of communicating both between asynchronous tasks 
@@ -68,68 +136,9 @@
     ;Returns #t if channel is empty, else returns #f
     cch-empty?
 
-
     ;  (cch-full? concurrent-channel) -> boolean
     ;Returns #t if channel is full, else returns #f
     cch-full?
-
-    ;  (concurrent-sleep task-box nsec) -> void
-    ;Cause a task to sleep for a minimum of nsec
-    concurrent-sleep
-
-    ;  (get-concurrent-handler task-box) -> handler 
-    ;concurrent-handler is a function that takes 1 input argument. (concurrent) 
-    ;will execute (concurrent-handler) with the result of the most recent task 
-    ;(starting with during the first evaluation). The output of concurrent-handler 
-    ;should be a task record. (concurrent) will return results when 
-    ;concurrent-handler returns anything that is not a task record. 
-    get-concurrent-handler
-
-    ;  (make-task thunk) -> task
-    ;  (make-task thunk fuel) -> task
-    ;  (make-task engine-or-thunk fuel is-engine) -> task 
-    ;thunk: any function that takes no arguments 
-    ;fuel: amount of fuel for process before blocking and allowing other tasks
-    ;to evaluate.
-    ;engine-or-thunk: An engine object or a thunk function.
-    ;is-engine: #t if engine-or-thunk is an engine object, else #f 
-    ;
-    ;This is only used if creating a custom concurrent-handler
-    make-task 
-
-    ;  (task? a) -> bool 
-    ;Returns #t if given value is a task record, else #f.
-    ;
-    ;This is only used if creating a custom concurrent-handler
-    task?
-
-    ;  (concurrent concurrent-handler) -> list-of-task-results 
-    ;asynchronously execute all tasks given from concurrent-handler.
-    ;
-    ;WARNINGS:
-    ;- Will not return if any tasks are blocking via cch-get! or cch-put!
-    ;- Do *not* use (set-timer) inside a task, will break implementation
-    ;- To make modification of shared memory safe, invoke (set-unsafe!). This 
-    ;  forces (concurrent) to execute linearly. Use (set-safe!) to restore 
-    ;  normal asynchronous execution.
-    concurrent  
-    
-    ;  (running? task-box) -> bool
-    ;Return whether task-box is currently running. If #f, safe to modify values 
-    ;running in (concurrent) with given task-box.
-    concurrent-running?
-   
-    ;  (pause-concurrent task-box) -> void 
-    ;Tell (concurrent) task-box to pause execution. Can check if (concurrent) 
-    ;is running with (concurrent-running? task-box). Only safe to execute from
-    ;from an outside thread, executing inside a running task will freeze 
-    ;execution and will not restart until an outside thread unpauses it.
-    pause-concurrent
-    
-    ;  (unpause-concurrent task-box) -> void
-    ;Tell (concurrent) task-box to resume execution. Can check if (concurrent) 
-    ;is running with (concurrent-running? task-box)
-    unpause-concurrent
 
     ;test bindings
     concurrent-debug
@@ -164,6 +173,36 @@
                (new fuel (make-engine engine-or-thunk)))]))))
 
 
+  ;PUBLIC API
+  ;  (concurrent concurrent-handler) -> list-of-results
+  ;concurrent-handler is a function that takes 1 input argument. (concurrent) 
+  ;will execute (concurrent-handler) with the result of the most recent task 
+  ;(starting with during the first evaluation). The output of concurrent-handler 
+  ;should be a task record. (concurrent) will return results when 
+  ;concurrent-handler returns anything that is not a task record.
+  (define (concurrent concurrent-handler)
+    ;execute tasks in concurrent
+    (define (exec-tasks handler results last-result)
+      ; pull the next task of the handler 
+      (let ([task (handler last-result)])
+        (if (task? task)
+            ; get task fuel value because it's used more than once
+            (let ([fuel (task-fuel task)])
+              ; execute task engine and handle results
+              (let ([engine-ret ((task-engine task)
+                                 fuel
+                                 ;#t if completed
+                                 (lambda (fuel ret-vals) (list #t ret-vals fuel)) 
+                                 ;#f is still running
+                                 (lambda (new-engine) (list #f new-engine)))]) 
+                (if (car engine-ret) 
+                    (exec-tasks handler (append results (list (cadr engine-ret))) cur-result)
+                    (exec-tasks handler results cur-result))))
+            results)))
+    ; execute tasks in concurrent
+    (exec-tasks concurrent-handler '() '()))
+
+
   ; task timeout 'mutex' functions
   (define (set-unsafe! tb) (task-box-unsafe-timeout-set! tb #t))
   (define (set-safe! tb) (task-box-unsafe-timeout-set! tb #f))
@@ -178,6 +217,7 @@
     (task-box-channel-waiting-nsec-set! task-box nsec)
     (set-safe!)
     (engine-block))
+
 
   (define-record-type
     task-box 
@@ -328,7 +368,7 @@
                    ;handle running if this is the first iteration
                    (when (not running)
                      (set! running #t))
-                   
+
                    ;check for pause in concurrent execution and handle it
                    (check-for-pause)
 
@@ -347,8 +387,8 @@
                        (if (eqv? '() waiting tb)
                            ; if there's no waiting tasks, return results 
                            (let ()
-                             (task-box-running-set! tb #f)
-                             results)
+                            (task-box-running-set! tb #f)
+                            results)
                            ; otherwise sleep (waiting on input from outside thread) and 
                            ; recurse exec-handler
                            (let ()
@@ -379,7 +419,7 @@
                               (dequeue-task!)))))))
 
 
-               (exec-handler result))])))))
+               (exec-handler result))]))))
 
 
 
@@ -459,6 +499,49 @@
 ;function that always emits a unique numerical value per invocation
 (define incrementor (get-incrementor))
 
+
+(define-record-type bq
+                    (fields
+                      (immutable data)
+                      (mutable head)
+                      (mutable tail)
+                      (mutable size)
+                      (immutable full?)
+                      (immutable empty?))
+                    (protocol
+                      (lambda (new)
+                        (lambda (bound)
+                          (let ([size 0])
+                            (new 
+                              (make-vector bound) 
+                              0 
+                              0
+                              size
+                              (lambda () ;full? 
+                                (eqv? size bound))
+                              (lambda () ;empty?
+                                (eqv? size 0))))))))
+
+(define dequeue!
+  (lambda (q)
+    (let ([head (bq-head q)])
+      (cond
+        [(= head (bq-tail q)) #f]
+        [else
+         (bq-size-set! q (+ (bq-size q) 1))
+         (bq-head-set! q (incr q head))
+         (vector-ref (bq-data q) head)]))))
+
+(define enqueue!
+  (lambda (q item)
+    (let* ([tail (bq-tail q)] [tail^ (incr q tail)])
+      (cond
+        [(= tail^ (bq-head q)) #f]
+        [else
+         (vector-set! (bq-data q) tail item)
+         (bq-tail-set! q tail^)
+         (bq-size-set! q (- (bq-size q) 1))])))) 
+
 ;record that contains threadsafe data passing functions. Can be created 
 ;without arguments to create a default record OR with custom communication 
 ;object and functions get!, put!, empty? and full? and return value failure 
@@ -474,219 +557,182 @@
     (immutable get!)
     (immutable put!)
     (immutable empty?)
-    (immutable full?)
-    (protocol
-      (lambda (new)
-        (lambda (tb) ;default concurrent-channel case
-          (let* ([obj (list)]
-                  [id (incrementor)]
-                  [failure #f]
-                  [default-get! (lambda ()
-                                  (let ([ret (car obj)])
-                                    (set! obj (cdr obj))
-                                    ret))]
-                  [default-put! (lambda () (let ([ret (car obj)])
-                                             (set! obj (cdr obj))
-                                             ret))]
-                  [internal-get! (lambda ()
-                                   (if (empty? obj)
-                                       failure
-                                       (let ()
-                                         (set-unsafe!)
-                                         (append-non-full-channel-id! tb id)
-                                         (default-get! obj)
-                                         (set-safe!))))]
-                  [internal-put! (lambda (val)
-                                   (if (full? obj)
-                                       failure
-                                       (let ()
-                                         (set-unsafe!)
-                                         (append-non-empty-channel-id! tb id)
-                                         (default-put! obj val)
-                                         (set-safe!))))])
-            (new tb
-                 obj
-                 id
-                 failure
-                 (lambda () ;default get!
-                   (define (loop)
-                     (if (empty? obj)
-                         (let ()
-                          (set-get-block! tb id)
-                          (engine-block)
-                          (loop))
-                         (internal-get!)))
-                   (loop))
-                 (lambda (val) ;default put!
-                   (define (loop)
-                     (if (full? obj)
-                         (let ()
-                          (set-put-block! tb id)
-                          (engine-block)
-                          (loop))
-                         (let ()
-                          (set! obj (append obj (list val)))
-                          (append-non-empty-channel-id! tb id))))
-                   (loop))
-                 (lambda () (eqv? '() obj)) ;default empty?
-                 (lambda () #f)))])))) ;default full? 
+    (immutable full?))
+  (protocol
+    (lambda (new)
+      (lambda (tb size) ;default concurrent-channel case
+        (let* ([obj (make-bq size)]
+                [id (incrementor)]
+                [failure #f]
+                [internal-get! (lambda ()
+                                 (if (empty? obj)
+                                     failure
+                                     (let ()
+                                       (set-unsafe!)
+                                       (append-non-full-channel-id! tb id)
+                                       (dequeue! obj)
+                                       (set-safe!))))]
+                [internal-put! (lambda (val)
+                                 (if (full? obj)
+                                     failure
+                                     (let ()
+                                       (set-unsafe!)
+                                       (append-non-empty-channel-id! tb id)
+                                       (enqueue! obj val)
+                                       (set-safe!))))])
+          (new tb
+               obj
+               id
+               failure
+               (lambda () ;default get!
+                 (define (loop)
+                   (if (empty? obj)
+                       (let ()
+                        (set-get-block! tb id)
+                        (engine-block)
+                        (loop))
+                       (internal-get!)))
+                 (loop))
+               (lambda (val) ;default put!
+                 (define (loop)
+                   (if (full? obj)
+                       (let ()
+                        (set-put-block! tb id)
+                        (engine-block)
+                        (loop))
+                       (let ()
+                        (set! obj (append obj (list val)))
+                        (append-non-empty-channel-id! tb id))))
+                 (loop))
+               (lambda () (eqv? '() obj)) ;default empty?
+               (lambda () #f)))])))) ;default full? 
 
 
-;for use in cch-get! and cch-put!. Returns whether a given channel is being 
-;used within a task-box running in concurrent within the same process and 
-;thread
-(define (in-running-task? tb)
-  (if (eqv? (task-box-thread-id tb) (safe-get-thread-id))
-      (if (eqv? (task-box-running tb) #t)
-          #t
-          #f)
-      #f))
+  ;for use in cch-get! and cch-put!. Returns whether a given channel is being 
+  ;used within a task-box running in concurrent within the same process and 
+  ;thread
+  (define (in-running-task? tb)
+    (if (eqv? (task-box-thread-id tb) (safe-get-thread-id))
+        (if (eqv? (task-box-running tb) #t)
+            #t
+            #f)
+        #f))
 
 
-(define (error-not-concurrent-channel ch)
-  (let ([o (open-output-string)])
-    (fprintf o "[cch-get!] provided ch ~a is not a concurrent-channel record\n" ch)
-    (raise-error (get-output-string o))
-    (values)))
+  (define (error-not-concurrent-channel ch)
+    (let ([o (open-output-string)])
+      (fprintf o "[cch-get!] provided ch ~a is not a concurrent-channel record\n" ch)
+      (raise-error (get-output-string o))
+      (values)))
 
 
-;explaining the implementation of the following concurrent-channel manipulation 
-;functions.
-;
-;concurrent-channel-get!/put! are used by tasks running in concurrent and blocks 
-;by default. This blocking behavior is managed by (concurrent) itself. 
-;cch-try-get!/put! implement an empty?/full? check inside of unsafe!/safe! 
-;calls, ensuring the the behavior is atomic.
-;
-;Since concurrent-channel-external-get!/put! are used by code *not* running in 
-;(concurrent) blocking behavior is not available and thus these functions are 
-;try-get!/try-put! by default. Thus we implement busy waiting to create 
-;blocking behavior. Data safety is ensured by pause-concurrent/unpause-concurrent
-;calls, which ensure that (concurrent) is paused before we attempt to modify 
-;data.
+  ;explaining the implementation of the following concurrent-channel manipulation 
+  ;functions.
+  ;
+  ;concurrent-channel-get!/put! are used by tasks running in concurrent and blocks 
+  ;by default. This blocking behavior is managed by (concurrent) itself. 
+  ;cch-try-get!/put! implement an empty?/full? check inside of unsafe!/safe! 
+  ;calls, ensuring the the behavior is atomic.
+  ;
+  ;Since concurrent-channel-external-get!/put! are used by code *not* running in 
+  ;(concurrent) blocking behavior is not available and thus these functions are 
+  ;try-get!/try-put! by default. Thus we implement busy waiting to create 
+  ;blocking behavior. Data safety is ensured by pause-concurrent/unpause-concurrent
+  ;calls, which ensure that (concurrent) is paused before we attempt to modify 
+  ;data.
 
 
-;PUBLIC API
-;  (cch-get! ch) -> any
-;blocking get
-(define (cch-get! ch)
-  (if (concurrent-channel? ch)
-      (let ([tb (concurrent-channel-task-box ch)])
-        ;cch-get! from running (concurrent) tasks block by default
-        ((concurrent-channel-get! ch)))
-      (error-not-concurrent-channel)))
+  ;PUBLIC API
+  ;  (cch-get! ch) -> any
+  ;blocking get
+  (define (cch-get! ch)
+    (if (concurrent-channel? ch)
+        (let ([tb (concurrent-channel-task-box ch)])
+          ;cch-get! from running (concurrent) tasks block by default
+          ((concurrent-channel-get! ch)))
+        (error-not-concurrent-channel)))
 
-;PUBLIC API
-;  (cch-try-get! ch) -> any
-;non-blocking get
-(define (cch-try-get! ch)
-  (if (concurrent-channel? ch)
-      (let ([tb (concurrent-channel-task-box ch)])
-        ;must implement try-get behavior for cch-try-get! calls from within 
-        ;tasks running in (concurrent)
+  ;PUBLIC API
+  ;  (cch-try-get! ch) -> any
+  ;non-blocking get
+  (define (cch-try-get! ch)
+    (if (concurrent-channel? ch)
+        (let ([tb (concurrent-channel-task-box ch)])
+          ;must implement try-get behavior for cch-try-get! calls from within 
+          ;tasks running in (concurrent)
+          (let ()
+           (set-unsafe!)
+           (if (cch-empty? ch)
+               (concurrent-channel-failure ch)
+               ((concurrent-channel-get! ch)))
+           (set-safe!)))
+        (error-not-concurrent-channel)))
+
+  ;PUBLIC API
+  ;  (cch-put! ch val) -> void
+  (define (cch-put! ch val)
+    (if (concurrent-channel? ch)
+        (let ([tb (concurrent-channel-task-box ch)])
+          ((concurrent-channel-put! ch) val))
+        (error-not-concurrent-channel)))
+
+  ;PUBLIC API
+  ;  (cch-try-put! ch val) -> void
+  (define (cch-try-put! ch val)
+    (if (concurrent-channel? ch)
+        (let ([tb (concurrent-channel-task-box ch)])
+          ((concurrent-channel-put! ch) val))
+        (error-not-concurrent-channel)))
+
+  ;PUBLIC API
+  ;  (cch-empty? ch) -> boolean
+  (define (cch-empty? ch)
+    (if (concurrent-channel? ch)
+        ((concurrent-channel-empty? ch))
+        (error-not-concurrent-channel)))
+
+  ;PUBLIC API
+  ;  (cch-empty? ch) -> boolean
+  (define (ch-full? ch)
+    (if (concurrent-channel? ch)
+        ((concurrent-channel-full? ch))
+        (error-not-concurrent-channel)))
+
+
+  (define concurrent-debug #f)
+  (define dprint
+    (lambda (tb args)
+      (when concurrent-debug
         (let ()
-         (set-unsafe!)
-         (if (cch-empty? ch)
-             (concurrent-channel-failure ch)
-             ((concurrent-channel-get! ch)))
-         (set-safe!)))
-      (error-not-concurrent-channel)))
-
-;PUBLIC API
-;  (cch-put! ch val) -> void
-(define (cch-put! ch val)
-  (if (concurrent-channel? ch)
-      (let ([tb (concurrent-channel-task-box ch)])
-        ((concurrent-channel-put! ch) val))
-      (error-not-concurrent-channel)))
-
-;PUBLIC API
-;  (cch-try-put! ch val) -> void
-(define (cch-try-put! ch val)
-  (if (concurrent-channel? ch)
-      (let ([tb (concurrent-channel-task-box ch)])
-        ((concurrent-channel-put! ch) val))
-      (error-not-concurrent-channel)))
-
-;PUBLIC API
-;  (cch-empty? ch) -> boolean
-(define (cch-empty? ch)
-  (if (concurrent-channel? ch)
-      ((concurrent-channel-empty? ch))
-      (error-not-concurrent-channel)))
-
-;PUBLIC API
-;  (cch-empty? ch) -> boolean
-(define (ch-full? ch)
-  (if (concurrent-channel? ch)
-      ((concurrent-channel-full? ch))
-      (error-not-concurrent-channel)))
+         (set-unsafe! tb)
+         (display "[concurrent-DEBUG-PRINT] ")
+         (map display args)
+         (display "\n")
+         (flush-output-port)
+         (set-safe! tb)))))
 
 
-(define concurrent-debug #f)
-(define dprint
-  (lambda (tb args)
-    (when concurrent-debug
-      (let ()
-       (set-unsafe! tb)
-       (display "[concurrent-DEBUG-PRINT] ")
-       (map display args)
-       (display "\n")
-       (flush-output-port)
-       (set-safe! tb)))))
+  ;PUBLIC API
+  ;  (get-concurrent-handler task-box) -> concurrent-handler
+  ;A concurrent handler is a function that takes 1 value and returns a task 
+  ;for (concurrent) to execute
+  (define (get-concurrent-handler tb)
+    (task-box-concurrent-handler tb))
 
-
-;PUBLIC API
-;  (get-concurrent-handler task-box) -> concurrent-handler
-;A concurrent handler is a function that takes 1 value and returns a task 
-;for (concurrent) to execute
-(define (get-concurrent-handler tb)
-  (task-box-concurrent-handler tb))
-
-
-;PUBLIC API
-;  (concurrent concurrent-handler) -> list-of-results
-;concurrent-handler is a function that takes 1 input argument. (concurrent) 
-;will execute (concurrent-handler) with the result of the most recent task 
-;(starting with during the first evaluation). The output of concurrent-handler 
-;should be a task record. (concurrent) will return results when 
-;concurrent-handler returns anything that is not a task record.
-(define (concurrent concurrent-handler)
-  ;execute tasks in concurrent
-  (define (exec-tasks handler results last-result)
-    ; pull the next task of the handler 
-    (let ([task (handler last-result)])
-      (if (task? task)
-          ; get task fuel value because it's used more than once
-          (let ([fuel (task-fuel task)])
-            ; execute task engine and handle results
-            (let ([engine-ret ((task-engine task)
-                               fuel
-                               ;#t if completed
-                               (lambda (fuel ret-vals) (list #t ret-vals fuel)) 
-                               ;#f is still running
-                               (lambda (new-engine) (list #f new-engine)))]) 
-              (if (car engine-ret) 
-                  (exec-tasks handler (append results (list (cadr engine-ret))) cur-result)
-                  (exec-tasks handler results cur-result))))
-          results)))
-  ; execute tasks in concurrent
-  (exec-tasks concurrent-handler '() '()))
-
-;PUBLIC API
-;  (go thunk) -> void
-;  (go thunk fuel) -> void
-;enqueue a thunk to be executed in a background taskbox
-(define go
-  (let ([go-enqueue! 
-         (lambda (tb task)
-           (if (task? task)
-               (let ([num-running (task-box-num-running-tasks tb)])
-                 (task-box-num-running-tasks-set! tb (+ num-running 1))
-                 (set-box! (task-box-task-queue tb) (append (task-box-task-queue tb) (list task))))
-               (let ([o (open-output-string)])
-                 (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
-                 (raise-error (get-output-string o)))))])
-    (case-lambda
-      [(tb thunk) (go-enqueue! tb (make-task thunk))]
-      [(tb thunk fuel) (go-enqueue! tb (make-task thunk fuel))]))))
+  ;PUBLIC API
+  ;  (go thunk) -> void
+  ;  (go thunk fuel) -> void
+  ;enqueue a thunk to be executed in a background taskbox
+  (define go
+    (let ([go-enqueue! 
+           (lambda (tb task)
+             (if (task? task)
+                 (let ([num-running (task-box-num-running-tasks tb)])
+                   (task-box-num-running-tasks-set! tb (+ num-running 1))
+                   (set-box! (task-box-task-queue tb) (append (task-box-task-queue tb) (list task))))
+                 (let ([o (open-output-string)])
+                   (fprintf o "[enqueue-task!] provided task ~a is not a task record, task thrown out\n" task)
+                   (raise-error (get-output-string o)))))])
+      (case-lambda
+        [(tb thunk) (go-enqueue! tb (make-task thunk))]
+        [(tb thunk fuel) (go-enqueue! tb (make-task thunk fuel))]))))
